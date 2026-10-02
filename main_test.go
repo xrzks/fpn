@@ -1,6 +1,10 @@
 package main
 
 import (
+	"os"
+	"path/filepath"
+	"reflect"
+	"sort"
 	"testing"
 )
 
@@ -149,4 +153,261 @@ func TestGetNormalizedPathName(t *testing.T) {
 			}
 		})
 	}
+}
+
+// ---------------------------------------------------------------------------
+// helpers
+// ---------------------------------------------------------------------------
+
+func mkdirs(t *testing.T, base string, dirs ...string) {
+	t.Helper()
+	for _, d := range dirs {
+		if err := os.MkdirAll(filepath.Join(base, d), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func touch(t *testing.T, base string, files ...string) {
+	t.Helper()
+	for _, f := range files {
+		if err := os.WriteFile(filepath.Join(base, f), nil, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// chdir moves into dir for the duration of the test so relative paths work.
+func chdir(t *testing.T, dir string) {
+	t.Helper()
+	old, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(dir); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chdir(old) })
+}
+
+func sorted(s []string) []string {
+	out := append([]string(nil), s...)
+	sort.Strings(out)
+	return out
+}
+
+func assertPaths(t *testing.T, got, want []string) {
+	t.Helper()
+	if !reflect.DeepEqual(sorted(got), sorted(want)) {
+		t.Fatalf("paths mismatch\n got: %v\nwant: %v", sorted(got), sorted(want))
+	}
+}
+
+func exists(t *testing.T, base string, rel ...string) {
+	t.Helper()
+	for _, r := range rel {
+		if _, err := os.Lstat(filepath.Join(base, r)); err != nil {
+			t.Errorf("expected %s to exist: %v", r, err)
+		}
+	}
+}
+
+func missing(t *testing.T, base string, rel ...string) {
+	t.Helper()
+	for _, r := range rel {
+		if _, err := os.Lstat(filepath.Join(base, r)); err == nil {
+			t.Errorf("expected %s not to exist", r)
+		}
+	}
+}
+
+// exampleTree builds the tree from the change spec.
+func exampleTree(t *testing.T) string {
+	t.Helper()
+	base := t.TempDir()
+	mkdirs(t, base, "Test Dir/Child One", "Test Dir/Child Two")
+	touch(t, base, "Test Dir/Child One/file.txt")
+	return base
+}
+
+// ---------------------------------------------------------------------------
+// Walk
+// ---------------------------------------------------------------------------
+
+func TestWalkNonRecursiveDirIsSingleEntry(t *testing.T) {
+	base := exampleTree(t)
+	root := filepath.Join(base, "Test Dir")
+	got, err := Walk([]string{root}, Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertPaths(t, got, []string{root})
+}
+
+func TestWalkNonRecursiveDoesNotReadDir(t *testing.T) {
+	base := t.TempDir()
+	root := filepath.Join(base, "Dir")
+	child := filepath.Join(root, "locked")
+	mkdirs(t, root, "locked")
+	if err := os.Chmod(child, 0o000); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(child, 0o755) })
+
+	got, err := walkRoot(root, Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertPaths(t, got, []string{root})
+}
+
+func TestWalkRecursiveIncludesRootAndAllDepths(t *testing.T) {
+	base := exampleTree(t)
+	root := filepath.Join(base, "Test Dir")
+	got, err := Walk([]string{root}, Config{Recursive: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertPaths(t, got, []string{
+		root,
+		filepath.Join(root, "Child One"),
+		filepath.Join(root, "Child One", "file.txt"),
+		filepath.Join(root, "Child Two"),
+	})
+}
+
+func TestWalkFileArgument(t *testing.T) {
+	base := t.TempDir()
+	touch(t, base, "A.txt")
+	f := filepath.Join(base, "A.txt")
+	for _, rec := range []bool{false, true} {
+		got, err := Walk([]string{f}, Config{Recursive: rec})
+		if err != nil {
+			t.Fatal(err)
+		}
+		assertPaths(t, got, []string{f})
+	}
+}
+
+func TestWalkSkipsGitAndDSStore(t *testing.T) {
+	base := t.TempDir()
+	mkdirs(t, base, "Dir/.git/objects")
+	touch(t, base, "Dir/.git/HEAD", "Dir/.DS_Store", "Dir/a.txt")
+	root := filepath.Join(base, "Dir")
+
+	// As root arguments.
+	got, err := Walk([]string{
+		filepath.Join(root, ".git"),
+		filepath.Join(root, ".DS_Store"),
+	}, Config{Recursive: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertPaths(t, got, nil)
+
+	// During a recursive walk.
+	got, err = Walk([]string{root}, Config{Recursive: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertPaths(t, got, []string{root, filepath.Join(root, "a.txt")})
+}
+
+func TestWalkTrailingSlash(t *testing.T) {
+	base := exampleTree(t)
+	chdir(t, base)
+	for _, rec := range []bool{false, true} {
+		cfg := Config{Recursive: rec}
+		a, err := Walk([]string{"Test Dir/"}, cfg)
+		if err != nil {
+			t.Fatal(err)
+		}
+		b, err := Walk([]string{"Test Dir"}, cfg)
+		if err != nil {
+			t.Fatal(err)
+		}
+		assertPaths(t, a, b)
+	}
+}
+
+func TestWalkDedupe(t *testing.T) {
+	base := exampleTree(t)
+	root := filepath.Join(base, "Test Dir")
+
+	got, err := Walk([]string{root, root}, Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(got, []string{root}) {
+		t.Fatalf("got %v", got)
+	}
+
+	sub := filepath.Join(root, "Child One")
+	got, err = Walk([]string{root, sub}, Config{Recursive: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	seen := map[string]bool{}
+	for _, p := range got {
+		if seen[p] {
+			t.Errorf("duplicate entry %s", p)
+		}
+		seen[p] = true
+	}
+	if len(got) != 4 {
+		t.Errorf("expected 4 entries, got %v", got)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Rename (run)
+// ---------------------------------------------------------------------------
+
+func TestRunNonRecursiveRenamesOnlyDir(t *testing.T) {
+	base := exampleTree(t)
+	chdir(t, base)
+	if err := run([]string{"Test Dir"}, Config{}); err != nil {
+		t.Fatal(err)
+	}
+	exists(t, base, "test-dir/Child One/file.txt", "test-dir/Child Two")
+	missing(t, base, "Test Dir")
+}
+
+func TestRunRecursiveExampleTree(t *testing.T) {
+	base := exampleTree(t)
+	chdir(t, base)
+	if err := run([]string{"Test Dir"}, Config{Recursive: true}); err != nil {
+		t.Fatal(err)
+	}
+	exists(t, base, "test-dir/child-one/file.txt", "test-dir/child-two")
+	missing(t, base, "Test Dir", "test-dir/Child One", "test-dir/Child Two")
+}
+
+func TestRunDuplicateTargets(t *testing.T) {
+	base := t.TempDir()
+	touch(t, base, "A b", "a_b")
+	chdir(t, base)
+	if err := run([]string{"A b", "a_b"}, Config{}); err == nil {
+		t.Fatal("expected collision error")
+	}
+	exists(t, base, "A b", "a_b")
+	missing(t, base, "a-b")
+}
+
+func TestRunCaseOnlyDirRename(t *testing.T) {
+	base := t.TempDir()
+	mkdirs(t, base, "MyDir")
+	touch(t, base, "MyDir/f.txt")
+	chdir(t, base)
+	if err := run([]string{"MyDir"}, Config{}); err != nil {
+		t.Fatal(err)
+	}
+	entries, err := os.ReadDir(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 || entries[0].Name() != "mydir" {
+		t.Fatalf("unexpected entries: %v", entries)
+	}
+	exists(t, base, "mydir/f.txt")
 }
