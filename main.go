@@ -32,22 +32,18 @@ func main() {
 }
 
 func run(args []string, config Config) error {
+	var argsErr error
 	if len(args) < 1 {
-		err := fmt.Errorf("please specify one or more directories or files")
-		fmt.Fprintln(os.Stderr, err)
-		return err
+		argsErr = fmt.Errorf("please specify one or more directories or files")
 	}
 	paths, walkErr := Walk(args, config)
-	if walkErr != nil {
-		fmt.Fprintln(os.Stderr, walkErr)
-	}
-
 	normErr := NormalizePaths(paths, config)
-	if normErr != nil {
-		fmt.Fprintln(os.Stderr, normErr)
-	}
 
-	return errors.Join(walkErr, normErr)
+	err := errors.Join(argsErr, walkErr, normErr)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+	}
+	return err
 }
 
 func Walk(roots []string, config Config) ([]string, error) {
@@ -71,7 +67,7 @@ func walkRoot(root string, config Config) ([]string, error) {
 
 	info, err := os.Stat(root)
 	if err != nil {
-		return nil, &walkError{path: root, err: err}
+		return nil, fmt.Errorf("fpn: %s: %w", root, err)
 	}
 
 	if !info.IsDir() {
@@ -82,7 +78,7 @@ func walkRoot(root string, config Config) ([]string, error) {
 	if !config.Recursive {
 		entries, err := os.ReadDir(root)
 		if err != nil {
-			return nil, &walkError{path: root, err: err}
+			return nil, fmt.Errorf("fpn: %s: %w", root, err)
 		}
 		for _, e := range entries {
 			if e.IsDir() {
@@ -113,21 +109,9 @@ func walkRoot(root string, config Config) ([]string, error) {
 		return nil
 	})
 	if err != nil {
-		return nil, &walkError{path: root, err: err}
+		return nil, fmt.Errorf("fpn: %s: %w", root, err)
 	}
 	return paths, nil
-}
-
-type walkError struct {
-	path string
-	err error
-}
-
-func (e *walkError) Error() string {
-	if os.IsNotExist(e.err) {
-		return fmt.Sprintf("fpn: %s: not found", e.path)
-	}
-	return fmt.Sprintf("fpn: %s: %v", e.path, e.err)
 }
 
 func shouldSkip(path string) bool {
@@ -140,18 +124,20 @@ func NormalizePaths(paths []string, config Config) error {
 		return nil
 	}
 
-	pairs := make(map[string]string, 2*len(paths))
-	for _, path := range paths {
-		pairs[path] = normalizePathName(path)
+	type planItem struct{ original, normalized string }
+	var plan []planItem
+	for _, p := range paths {
+		n := normalizePathName(p)
+		if p != n {
+			plan = append(plan, planItem{original: p, normalized: n})
+		}
 	}
 
 	var pending []renameOp
 	var conflicts []string
 
-	for original, normalized := range pairs {
-		if original == normalized {
-			continue
-		}
+	for _, item := range plan {
+		original, normalized := item.original, item.normalized
 		srcInfo, srcErr := os.Stat(original)
 		if srcErr != nil {
 			continue
