@@ -284,7 +284,12 @@ func normalizePathName(path string) string {
 func normalizeBaseName(name string) string {
 	name = strings.Join(strings.Fields(name), " ")
 	replacer := strings.NewReplacer(" ", "-", "_", "-")
-	return strings.ToLower(replacer.Replace(name))
+	result := strings.ToLower(replacer.Replace(name))
+	// Collapse runs of hyphens (e.g. "- -" -> "-" and "a  -  b" -> "a-b").
+	for strings.Contains(result, "--") {
+		result = strings.ReplaceAll(result, "--", "-")
+	}
+	return result
 }
 
 func logRenames(renames []renameOp) {

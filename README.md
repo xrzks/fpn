@@ -24,10 +24,12 @@ Directories are renamed after their contents, so nested paths are moved along wi
 ## Behavior
 
 - Only the final path component of each entry is renamed. Parent directories are left as-is.
-- The base name is lowercased, runs of whitespace are collapsed to a single space, then every space and underscore becomes `-`. Examples:
+- The base name is lowercased, runs of whitespace are collapsed to a single space, then every space and underscore becomes `-`. Runs of two or more hyphens are then collapsed to a single `-`. Examples:
   - `My File.txt` → `my-file.txt`
   - `Another_File.md` → `another-file.md`
   - `Mixed_Case  Foo.MD` → `mixed-case-foo.md`
+  - `hello -world` → `hello-world`
+  - `a  -  b` → `a-b`
 - A trailing slash on an argument is ignored (`fpn "Test Dir/"` is the same as `fpn "Test Dir"`).
 - `.` and `..` normalize to themselves, so they are never renamed. With `--recursive` their contents are still walked. To rename the current directory, run `fpn` from its parent.
 - `.git` and `.DS_Store` are always skipped, including everything inside a skipped directory.

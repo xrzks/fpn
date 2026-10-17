@@ -104,14 +104,34 @@ func TestGetNormalizedPathName(t *testing.T) {
 			want: "",
 		},
 		{
-			name: "hyphen between spaces produces double hyphen",
+			name: "hyphen between spaces collapses to single hyphen",
 			path: "hello -world",
-			want: "hello--world",
+			want: "hello-world",
 		},
 		{
-			name: "spaces around hyphen produce triple hyphens",
+			name: "spaces around hyphen collapse to single hyphen",
 			path: "a  -  b",
-			want: "a---b",
+			want: "a-b",
+		},
+		{
+			name: "three or more consecutive hyphens collapse to one",
+			path: "a---b",
+			want: "a-b",
+		},
+		{
+			name: "pre-existing multiple hyphens collapse to one",
+			path: "a----b",
+			want: "a-b",
+		},
+		{
+			name: "hyphen-space-hyphen becomes single hyphen",
+			path: "- -",
+			want: "-",
+		},
+		{
+			name: "single hyphens preserved",
+			path: "a-b-c",
+			want: "a-b-c",
 		},
 		{
 			name: "preserves forward slashes",
