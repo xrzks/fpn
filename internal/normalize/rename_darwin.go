@@ -1,4 +1,4 @@
-package main
+package normalize
 
 import "golang.org/x/sys/unix"
 

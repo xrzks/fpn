@@ -15,7 +15,11 @@ fpn [--dry] [--recursive] <path>...
 ```
 
 - `--dry` — print what would happen, without renaming anything. Collisions and other errors still produce a non-zero exit status.
-- `--recursive` — also rename everything nested inside directory arguments (files and subdirectories, at every depth). The directory argument itself is renamed too. Without this flag, each argument, file or directory, is a single entry and nothing inside a directory is read or touched.
+- `--recursive`, `-r` — also rename everything nested inside directory arguments (files and subdirectories, at every depth). The directory argument itself is renamed too. Without this flag, each argument, file or directory, is a single entry and nothing inside a directory is read or touched.
+
+- `--help`, `-h` — show command usage and available flags.
+
+Use `--` before paths beginning with a dash (for example, `fpn -- "-My File.txt"`).
 
 Directories are renamed after their contents, so nested paths are moved along with their (already normalized) parent.
 
@@ -84,6 +88,15 @@ fpn ./*        # add ./.* to include dotfiles
 ```
 
 To rename an entire tree, use `fpn --recursive .` (`.` itself is not renamed).
+
+## Development
+
+The root `main.go` is a thin entry point, preserving `go run .` and the install command above.
+
+- `internal/cli` defines the command and flags using `urfave/cli/v3`.
+- `internal/normalize` owns traversal, normalization planning, reporting, and platform-specific safe renames. It returns errors to the caller and supports injected output writers.
+
+Run the tests with `go test ./...` and build with `go build .`.
 
 ## License
 

@@ -1,4 +1,4 @@
-package main
+package normalize
 
 import (
 	"os"
@@ -387,7 +387,7 @@ func TestWalkDedupe(t *testing.T) {
 func TestRunNonRecursiveRenamesOnlyDir(t *testing.T) {
 	base := exampleTree(t)
 	chdir(t, base)
-	if err := run([]string{"Test Dir"}, Config{}); err != nil {
+	if err := Run([]string{"Test Dir"}, Config{}); err != nil {
 		t.Fatal(err)
 	}
 	exists(t, base, "test-dir/Child One/file.txt", "test-dir/Child Two")
@@ -397,7 +397,7 @@ func TestRunNonRecursiveRenamesOnlyDir(t *testing.T) {
 func TestRunRecursiveExampleTree(t *testing.T) {
 	base := exampleTree(t)
 	chdir(t, base)
-	if err := run([]string{"Test Dir"}, Config{Recursive: true}); err != nil {
+	if err := Run([]string{"Test Dir"}, Config{Recursive: true}); err != nil {
 		t.Fatal(err)
 	}
 	exists(t, base, "test-dir/child-one/file.txt", "test-dir/child-two")
@@ -408,7 +408,7 @@ func TestRunDuplicateTargets(t *testing.T) {
 	base := t.TempDir()
 	touch(t, base, "A b", "a_b")
 	chdir(t, base)
-	if err := run([]string{"A b", "a_b"}, Config{}); err == nil {
+	if err := Run([]string{"A b", "a_b"}, Config{}); err == nil {
 		t.Fatal("expected collision error")
 	}
 	exists(t, base, "A b", "a_b")
@@ -452,7 +452,7 @@ func TestRunAliasedParentCollision(t *testing.T) {
 						t.Fatal(err)
 					}
 				}
-				if err := run([]string{"A b", other}, Config{DryRun: dry}); err == nil {
+				if err := Run([]string{"A b", other}, Config{DryRun: dry}); err == nil {
 					t.Fatal("expected alias collision error")
 				}
 				for source, want := range map[string]string{"A b": "first", "a_b": "second"} {
@@ -484,7 +484,7 @@ func TestRunSameSourceAliases(t *testing.T) {
 			} else {
 				t.Logf("cannot test symlink alias: %v", err)
 			}
-			if err := run(args, Config{DryRun: dry}); err != nil {
+			if err := Run(args, Config{DryRun: dry}); err != nil {
 				t.Fatalf("same-source aliases should not collide or execute twice: %v", err)
 			}
 			wantPath, absentPath := "my-file", "My File"
@@ -512,7 +512,7 @@ func TestNormalizePathsInvalidBasenames(t *testing.T) {
 				touch(t, base, "Safe File", name)
 				// Include a valid operation first to verify validation happens
 				// before any planned renames are executed.
-				err := run([]string{"Safe File", name}, Config{DryRun: dry})
+				err := Run([]string{"Safe File", name}, Config{DryRun: dry})
 				if err == nil || !strings.Contains(err.Error(), "invalid normalized basename") {
 					t.Fatalf("expected invalid basename diagnostic, got %v", err)
 				}
@@ -556,7 +556,7 @@ func TestRunDryRunCollision(t *testing.T) {
 				other = "a_b"
 			}
 			touch(t, base, "A b", other, "Safe File")
-			if err := run([]string{"A b", other, "Safe File"}, Config{DryRun: true}); err == nil {
+			if err := Run([]string{"A b", other, "Safe File"}, Config{DryRun: true}); err == nil {
 				t.Fatal("expected dry-run collision error")
 			}
 			exists(t, base, "A b", other, "Safe File")
@@ -590,7 +590,7 @@ func TestRunPreservesDestinationLinks(t *testing.T) {
 				t.Fatal(err)
 			}
 			for _, dry := range []bool{true, false} {
-				if err := run([]string{"My File"}, Config{DryRun: dry}); err == nil {
+				if err := Run([]string{"My File"}, Config{DryRun: dry}); err == nil {
 					t.Fatalf("expected collision error (dry=%v)", dry)
 				}
 				after, err := os.Lstat("my-file")
@@ -631,11 +631,11 @@ func TestRunChildFirstAcrossPathAliases(t *testing.T) {
 					paths = append(paths, "Alias")
 				}
 			}
-			if err := run(paths, Config{DryRun: true}); err != nil {
+			if err := Run(paths, Config{DryRun: true}); err != nil {
 				t.Fatalf("dry run: %v", err)
 			}
 			exists(t, base, filepath.Join(parent, "Child File"))
-			if err := run(paths, Config{}); err != nil {
+			if err := Run(paths, Config{}); err != nil {
 				t.Fatalf("real run: %v", err)
 			}
 			normalizedParent := filepath.Join(filepath.Dir(parent), "parent")
@@ -660,7 +660,7 @@ func TestRunRenamesDanglingSymlink(t *testing.T) {
 	if err := os.Symlink("missing-target", "My Link"); err != nil {
 		t.Skipf("cannot create symlink: %v", err)
 	}
-	if err := run([]string{"My Link"}, Config{}); err != nil {
+	if err := Run([]string{"My Link"}, Config{}); err != nil {
 		t.Fatal(err)
 	}
 	missing(t, base, "My Link")
@@ -675,7 +675,7 @@ func TestRunCaseOnlyDirRename(t *testing.T) {
 	mkdirs(t, base, "MyDir")
 	touch(t, base, "MyDir/f.txt")
 	chdir(t, base)
-	if err := run([]string{"MyDir"}, Config{}); err != nil {
+	if err := Run([]string{"MyDir"}, Config{}); err != nil {
 		t.Fatal(err)
 	}
 	entries, err := os.ReadDir(base)
