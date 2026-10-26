@@ -13,7 +13,9 @@ func TestHelp(t *testing.T) {
 	for _, flag := range []string{"--help", "-h"} {
 		t.Run(flag, func(t *testing.T) {
 			var out, diagnostics bytes.Buffer
-			if err := New(&out, &diagnostics).Run(context.Background(), []string{"fpn", flag}); err != nil {
+			cmd := New()
+			cmd.Writer, cmd.ErrWriter = &out, &diagnostics
+			if err := cmd.Run(context.Background(), []string{"fpn", flag}); err != nil {
 				t.Fatal(err)
 			}
 			for _, want := range []string{"fpn", "<path>...", "--dry", "--recursive", "-r", "--help"} {
@@ -32,7 +34,9 @@ func TestInvalidArguments(t *testing.T) {
 	for _, args := range [][]string{nil, {"--dirs"}, {"--unknown"}, {"--dry=invalid"}} {
 		t.Run(strings.Join(args, " "), func(t *testing.T) {
 			var out, diagnostics bytes.Buffer
-			err := New(&out, &diagnostics).Run(context.Background(), append([]string{"fpn"}, args...))
+			cmd := New()
+			cmd.Writer, cmd.ErrWriter = &out, &diagnostics
+			err := cmd.Run(context.Background(), append([]string{"fpn"}, args...))
 			if err == nil {
 				t.Fatal("expected error")
 			}
@@ -67,7 +71,9 @@ func TestRenameFlags(t *testing.T) {
 				}
 				args = append(args, root)
 				var out, diagnostics bytes.Buffer
-				if err := New(&out, &diagnostics).Run(context.Background(), args); err != nil {
+				cmd := New()
+				cmd.Writer, cmd.ErrWriter = &out, &diagnostics
+				if err := cmd.Run(context.Background(), args); err != nil {
 					t.Fatal(err)
 				}
 				wantRoot, wantChild := "test-dir", "Child File"
@@ -105,7 +111,9 @@ func TestEndOfFlags(t *testing.T) {
 		t.Fatal(err)
 	}
 	var out, diagnostics bytes.Buffer
-	if err := New(&out, &diagnostics).Run(context.Background(), []string{"fpn", "--", "-My File"}); err != nil {
+	cmd := New()
+	cmd.Writer, cmd.ErrWriter = &out, &diagnostics
+	if err := cmd.Run(context.Background(), []string{"fpn", "--", "-My File"}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat("-my-file"); err != nil {

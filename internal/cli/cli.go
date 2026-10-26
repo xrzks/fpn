@@ -3,20 +3,17 @@ package cli
 
 import (
 	"context"
-	"io"
 
 	"github.com/urfave/cli/v3"
 	"github.com/xrzks/fpn/internal/normalize"
 )
 
-// New constructs an independent command. Nil writers use the standard streams.
-func New(stdout, stderr io.Writer) *cli.Command {
+// New constructs an independent command using the standard streams.
+func New() *cli.Command {
 	return &cli.Command{
 		Name:      "fpn",
 		Usage:     "Normalize file and directory names",
 		ArgsUsage: "<path>...",
-		Writer:    stdout,
-		ErrWriter: stderr,
 		Flags: []cli.Flag{
 			&cli.BoolFlag{
 				Name:  "dry",
