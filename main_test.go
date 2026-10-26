@@ -414,6 +414,85 @@ func TestRunDuplicateTargets(t *testing.T) {
 	missing(t, base, "a-b")
 }
 
+func TestRunDryRunCollision(t *testing.T) {
+	for _, duplicateTarget := range []bool{false, true} {
+		t.Run(map[bool]string{false: "existing destination", true: "duplicate target"}[duplicateTarget], func(t *testing.T) {
+			base := t.TempDir()
+			chdir(t, base)
+			other := "a-b"
+			if duplicateTarget {
+				other = "a_b"
+			}
+			touch(t, base, "A b", other, "Safe File")
+			if err := run([]string{"A b", other, "Safe File"}, Config{DryRun: true}); err == nil {
+				t.Fatal("expected dry-run collision error")
+			}
+			exists(t, base, "A b", other, "Safe File")
+			missing(t, base, "safe-file")
+		})
+	}
+}
+
+func TestRunPreservesDestinationLinks(t *testing.T) {
+	for _, kind := range []string{"dangling symlink", "symlink to source", "hard link"} {
+		t.Run(kind, func(t *testing.T) {
+			base := t.TempDir()
+			chdir(t, base)
+			if err := os.WriteFile("My File", []byte("source content"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			var err error
+			switch kind {
+			case "dangling symlink":
+				err = os.Symlink("missing-target", "my-file")
+			case "symlink to source":
+				err = os.Symlink("My File", "my-file")
+			case "hard link":
+				err = os.Link("My File", "my-file")
+			}
+			if err != nil {
+				t.Skipf("cannot create %s: %v", kind, err)
+			}
+			before, err := os.Lstat("my-file")
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, dry := range []bool{true, false} {
+				if err := run([]string{"My File"}, Config{DryRun: dry}); err == nil {
+					t.Fatalf("expected collision error (dry=%v)", dry)
+				}
+				after, err := os.Lstat("my-file")
+				if err != nil {
+					t.Fatal(err)
+				}
+				if !os.SameFile(before, after) || before.Mode() != after.Mode() {
+					t.Fatal("destination link was replaced")
+				}
+				content, err := os.ReadFile("My File")
+				if err != nil || string(content) != "source content" {
+					t.Fatalf("source changed: content=%q, err=%v", content, err)
+				}
+			}
+		})
+	}
+}
+
+func TestRunRenamesDanglingSymlink(t *testing.T) {
+	base := t.TempDir()
+	chdir(t, base)
+	if err := os.Symlink("missing-target", "My Link"); err != nil {
+		t.Skipf("cannot create symlink: %v", err)
+	}
+	if err := run([]string{"My Link"}, Config{}); err != nil {
+		t.Fatal(err)
+	}
+	missing(t, base, "My Link")
+	target, err := os.Readlink("my-link")
+	if err != nil || target != "missing-target" {
+		t.Fatalf("symlink target=%q, err=%v", target, err)
+	}
+}
+
 func TestRunCaseOnlyDirRename(t *testing.T) {
 	base := t.TempDir()
 	mkdirs(t, base, "MyDir")

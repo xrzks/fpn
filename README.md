@@ -14,7 +14,7 @@ go install github.com/xrzks/fpn@latest
 fpn [--dry] [--recursive] <path>...
 ```
 
-- `--dry` — print what would happen, without renaming anything.
+- `--dry` — print what would happen, without renaming anything. Collisions and other errors still produce a non-zero exit status.
 - `--recursive` — also rename everything nested inside directory arguments (files and subdirectories, at every depth). The directory argument itself is renamed too. Without this flag, each argument, file or directory, is a single entry and nothing inside a directory is read or touched.
 
 Directories are renamed after their contents, so nested paths are moved along with their (already normalized) parent.
@@ -37,7 +37,8 @@ Directories are renamed after their contents, so nested paths are moved along wi
 - Duplicate paths (the same path given twice, or overlapping arguments such as `-r Dir Dir/Sub`) are processed once.
 - If a normalized name already exists on disk as a different file, `fpn` reports a collision and leaves that pair alone — but other safe renames in the same run still proceed and the process exits non-zero so scripts can detect the partial failure.
 - If several entries would normalize to the same name (e.g. `A b` and `a_b` both become `a-b`), `fpn` reports one collision naming the target and all sources, and renames none of them. This counts toward the non-zero exit.
-- A name that already refers to the same file under different case (e.g. `LICENSE` and `license` on a case-insensitive filesystem like APFS) is not treated as a collision; it is renamed via a temporary name.
+- A name that already refers to the same file under different case (e.g. `LICENSE` and `license` on a case-insensitive filesystem like APFS) is not treated as a collision; it is renamed via a temporary name. Separate destination entries, including hard links and symlinks (even dangling ones), are treated as collisions.
+- Symlinks are renamed as links, without following them or changing their stored targets. Recursive walks do not traverse symlinked directories.
 - On success (or partial success), a table of `ORIGINAL` → `NORMALIZED` is printed.
 
 ## Example

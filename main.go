@@ -81,7 +81,7 @@ func walkRoot(root string, config Config) ([]string, error) {
 		return nil, nil
 	}
 
-	info, err := os.Stat(root)
+	info, err := os.Lstat(root)
 	if err != nil {
 		return nil, fmt.Errorf("fpn: %s: %w", root, err)
 	}
@@ -161,11 +161,11 @@ func NormalizePaths(paths []string, config Config) error {
 
 	for _, item := range plan {
 		original, normalized := item.original, item.normalized
-		srcInfo, srcErr := os.Stat(original)
+		srcInfo, srcErr := os.Lstat(original)
 		if srcErr != nil {
 			continue
 		}
-		dstInfo, dstErr := os.Stat(normalized)
+		dstInfo, dstErr := os.Lstat(normalized)
 		switch {
 		case os.IsNotExist(dstErr):
 			pending = append(pending, renameOp{from: original, to: normalized})
@@ -176,7 +176,7 @@ func NormalizePaths(paths []string, config Config) error {
 			))
 			skipped++
 		default:
-			if os.SameFile(srcInfo, dstInfo) {
+			if os.SameFile(srcInfo, dstInfo) && isCaseAlias(normalized) {
 				pending = append(pending, renameOp{from: original, to: normalized, caseOnly: true})
 				continue
 			}
@@ -199,6 +199,10 @@ func NormalizePaths(paths []string, config Config) error {
 
 	if config.DryRun {
 		logRenames(pending)
+		if len(conflicts) > 0 {
+			return fmt.Errorf("%d collision(s); would rename %d, skipped %d",
+				len(conflicts), len(pending), skipped)
+		}
 		return nil
 	}
 
@@ -228,6 +232,22 @@ func NormalizePaths(paths []string, config Config) error {
 			len(conflicts), len(pending), skipped)
 	}
 	return nil
+}
+
+// isCaseAlias distinguishes a case-insensitive lookup of the source from a
+// separate directory entry (such as a hard link) at the destination. On an
+// unreadable directory, fail closed and treat the destination as a collision.
+func isCaseAlias(destination string) bool {
+	entries, err := os.ReadDir(filepath.Dir(destination))
+	if err != nil {
+		return false
+	}
+	for _, entry := range entries {
+		if entry.Name() == filepath.Base(destination) {
+			return false
+		}
+	}
+	return true
 }
 
 type renameOp struct {
