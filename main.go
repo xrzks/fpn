@@ -313,40 +313,24 @@ type renameOp struct {
 
 func renameOne(r renameOp) error {
 	if !r.caseOnly {
-		return os.Rename(r.from, r.to)
+		return renameNoReplace(r.from, r.to)
 	}
 	dir := filepath.Dir(r.from)
-	// The placeholder must match the source type: a directory cannot be
-	// renamed onto a file (and vice versa).
-	info, err := os.Lstat(r.from)
+	// Keep the temporary entry inside a private directory. No placeholder
+	// needs to be removed or overwritten, for either files or directories.
+	tmpDir, err := os.MkdirTemp(dir, ".fpn-*")
 	if err != nil {
 		return err
 	}
-	var tmpPath string
-	if info.IsDir() {
-		tmpPath, err = os.MkdirTemp(dir, ".fpn-*")
-		if err != nil {
-			return err
-		}
-		// Reserve a unique name; renaming onto an existing dir is not
-		// portable.
-		if err := os.Remove(tmpPath); err != nil {
-			return err
-		}
-	} else {
-		f, err := os.CreateTemp(dir, ".fpn-*")
-		if err != nil {
-			return err
-		}
-		tmpPath = f.Name()
-		f.Close()
-	}
-	if err := os.Rename(r.from, tmpPath); err != nil {
-		os.Remove(tmpPath)
+	defer os.Remove(tmpDir) // Never remove a source left here after failed rollback.
+	tmpPath := filepath.Join(tmpDir, "entry")
+	if err := renameNoReplace(r.from, tmpPath); err != nil {
 		return err
 	}
-	if err := os.Rename(tmpPath, r.to); err != nil {
-		os.Rename(tmpPath, r.from)
+	if err := renameNoReplace(tmpPath, r.to); err != nil {
+		if rollbackErr := renameNoReplace(tmpPath, r.from); rollbackErr != nil {
+			return errors.Join(err, fmt.Errorf("restore %q failed; source preserved at %q: %w", r.from, tmpPath, rollbackErr))
+		}
 		return err
 	}
 	return nil
