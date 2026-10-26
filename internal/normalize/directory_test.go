@@ -56,13 +56,13 @@ func TestCanonicalAliasDoesNotSelectWrongCaseHardlink(t *testing.T) {
 	}
 	// Model case-sensitive, normalization-insensitive lookup, even on Linux.
 	d.ignoreCase, d.ignoreEncoding = false, true
-	info, err := os.Lstat(filepath.Join(base, destination))
-	if err != nil {
-		t.Fatal(err)
+	if err := d.validateSource("café"); err == nil {
+		t.Fatal("canonical alias must not select either stored hardlink")
 	}
-	actual, err := d.actualName("café", info)
-	if err != nil || actual != destination {
-		t.Fatalf("actualName = %q, %v; want distinct destination %q", actual, err, destination)
+	for _, name := range []string{source, destination} {
+		if err := d.validateSource(name); err != nil {
+			t.Fatalf("exact source %q rejected: %v", name, err)
+		}
 	}
 }
 
@@ -92,11 +92,7 @@ func TestUnknownAliasFailsWithoutScanningHardlinks(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	info, err := os.Lstat(filepath.Join(base, "My File"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := d.actualName("MYFILE~1", info); err == nil {
+	if err := d.validateSource("MYFILE~1"); err == nil {
 		t.Fatal("unknown short-name alias must fail closed rather than guess an entry")
 	}
 }
@@ -109,7 +105,7 @@ func TestCaseDistinctUnicodeTargetsRemainIndependent(t *testing.T) {
 		t.Skip("normalization-insensitive filesystem")
 	}
 	var out bytes.Buffer
-	if err := Run([]string{"Café File", "Cafe\u0301_File"}, Config{Writer: &out}); err != nil {
+	if err := Run([]string{"."}, Config{Recursive: true, Writer: &out}); err != nil {
 		t.Fatal(err)
 	}
 	exists(t, base, "café-file", "cafe\u0301-file")

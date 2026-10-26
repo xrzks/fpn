@@ -1,7 +1,6 @@
 package normalize
 
 import (
-	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -32,22 +31,21 @@ func (c Config) errWriter() io.Writer {
 	return os.Stderr
 }
 
-// Run walks and normalizes the supplied paths. The caller is responsible for
-// reporting the returned error.
+// Run walks and normalizes exactly one supplied path. The caller is responsible
+// for reporting the returned error. Invalid input and walk failures never rename
+// any entries.
 func Run(args []string, config Config) error {
-	if len(args) < 1 {
-		return diagnosticError{fmt.Errorf("please specify one or more directories or files")}
+	if len(args) != 1 {
+		return diagnosticError{fmt.Errorf("please specify exactly one directory or file")}
 	}
-	// Validate every argument before traversal so malformed input cannot
-	// trigger partial renames of otherwise valid roots.
-	for _, path := range args {
-		if path == "" {
-			return diagnosticError{fmt.Errorf("fpn: path argument must not be empty")}
-		}
+	if args[0] == "" {
+		return diagnosticError{fmt.Errorf("fpn: path argument must not be empty")}
 	}
-	paths, walkErr := Walk(args, config)
-	normErr := NormalizePaths(paths, config)
-	if err := errors.Join(walkErr, normErr); err != nil {
+	paths, err := Walk(args[0], config)
+	if err != nil {
+		return diagnosticError{err}
+	}
+	if err := NormalizePaths(paths, config); err != nil {
 		return diagnosticError{err}
 	}
 	return nil

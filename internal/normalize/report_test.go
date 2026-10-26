@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -78,30 +79,28 @@ func TestRunReportsToConfiguredWriters(t *testing.T) {
 		t.Run(fmt.Sprintf("dry=%v", dry), func(t *testing.T) {
 			base := t.TempDir()
 			chdir(t, base)
-			touch(t, base, "A b", "a_b", "Safe File")
+			touch(t, base, ".git", "A b", "a_b", "Safe File")
 			var out, diagnostics bytes.Buffer
-			err := Run([]string{".git", "A b", "a_b", "Safe File"}, Config{
-				DryRun: dry, Writer: &out, ErrWriter: &diagnostics,
+			if err := Run([]string{".git"}, Config{Writer: &out, ErrWriter: &diagnostics}); err != nil {
+				t.Fatal(err)
+			}
+			err := Run([]string{"."}, Config{
+				Recursive: true, DryRun: dry, Writer: &out, ErrWriter: &diagnostics,
 			})
 			if err == nil || !strings.Contains(err.Error(), "1 collision(s)") {
 				t.Fatalf("expected returned collision summary, got %v", err)
 			}
-			wantDiagnostics := "fpn: .git: skipped\n" +
-				"collision: a-b would be produced by multiple sources: A b, a_b\n"
+			physical := physicalDir(t, base)
+			wantDiagnostics := fmt.Sprintf("fpn: .git: skipped\ncollision: %s would be produced by multiple sources: %s, %s\n",
+				filepath.Join(physical, "a-b"), filepath.Join(physical, "A b"), filepath.Join(physical, "a_b"))
 			if diagnostics.String() != wantDiagnostics {
 				t.Fatalf("diagnostics = %q, want %q", diagnostics.String(), wantDiagnostics)
 			}
-			wantTable := "ORIGINAL   NORMALIZED\nSafe File  safe-file\n"
-			if out.String() != wantTable {
-				t.Fatalf("table = %q, want %q", out.String(), wantTable)
+			if out.Len() != 0 {
+				t.Fatalf("failed plan must not report proposed renames: %q", out.String())
 			}
-			if dry {
-				exists(t, base, "Safe File")
-				missing(t, base, "safe-file")
-			} else {
-				exists(t, base, "safe-file")
-				missing(t, base, "Safe File")
-			}
+			exists(t, base, "Safe File", "A b", "a_b")
+			missing(t, base, "safe-file", "a-b")
 		})
 	}
 }

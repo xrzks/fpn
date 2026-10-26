@@ -1,40 +1,13 @@
 package normalize
 
-import (
-	"errors"
-	"fmt"
-	"os"
-	"path/filepath"
-)
+import "os"
 
 type renameOp struct {
 	from, to string
-	caseOnly bool
 }
 
 func renameOne(r renameOp) error {
-	if !r.caseOnly {
-		return renameNoReplace(r.from, r.to)
-	}
-	dir := filepath.Dir(r.from)
-	// Keep the temporary entry inside a private directory. No placeholder
-	// needs to be removed or overwritten, for either files or directories.
-	tmpDir, err := os.MkdirTemp(dir, ".fpn-*")
-	if err != nil {
-		return err
-	}
-	defer os.Remove(tmpDir) // Never remove a source left here after failed rollback.
-	tmpPath := filepath.Join(tmpDir, "entry")
-	if err := renameNoReplace(r.from, tmpPath); err != nil {
-		return err
-	}
-	if err := renameNoReplace(tmpPath, r.to); err != nil {
-		if rollbackErr := renameNoReplace(tmpPath, r.from); rollbackErr != nil {
-			return errors.Join(err, fmt.Errorf("restore %q failed; source preserved at %q: %w", r.from, tmpPath, rollbackErr))
-		}
-		return err
-	}
-	return nil
+	return renameNoReplace(r.from, r.to)
 }
 
 // renameNoReplace atomically moves an entry only if its destination is absent.

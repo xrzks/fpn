@@ -18,7 +18,6 @@ import (
 type directory struct {
 	path                       string
 	entries                    map[string]fs.DirEntry
-	aliases                    map[string][]string
 	ignoreCase, ignoreEncoding bool
 }
 
@@ -54,12 +53,10 @@ func (c *directoryCache) get(path string) (*directory, error) {
 	if err != nil {
 		return nil, err
 	}
-	d := &directory{path: path, entries: make(map[string]fs.DirEntry), aliases: make(map[string][]string)}
+	d := &directory{path: path, entries: make(map[string]fs.DirEntry)}
 	for _, entry := range entries {
 		name := entry.Name()
 		d.entries[name] = entry
-		key := foldedName(norm.NFD.String(name))
-		d.aliases[key] = append(d.aliases[key], name)
 	}
 	// Probe only existing entries: dry runs never create filesystem entries.
 	// Once a usable spelling is found, one lookup establishes each rule.
@@ -123,32 +120,13 @@ func (d *directory) nameKey(name string) string {
 	return name
 }
 
-// actualName resolves aliases to a stored directory-entry name, not an inode.
-func (d *directory) actualName(name string, info os.FileInfo) (string, error) {
-	if d.entries[name] != nil {
-		return name, nil
+// validateSource requires the exact stored basename, not a case, Unicode,
+// short-name, or inode alias. Lookup rules are used only for target collisions.
+func (d *directory) validateSource(name string) error {
+	if d.entries[name] == nil {
+		return fmt.Errorf("fpn: source basename %q does not exactly match a stored directory entry in %q", name, d.path)
 	}
-	candidates := d.aliases[foldedName(norm.NFD.String(name))]
-	actual := ""
-	for _, candidate := range candidates {
-		if d.nameKey(candidate) != d.nameKey(name) {
-			continue
-		}
-		entryInfo, err := d.entries[candidate].Info()
-		if err != nil {
-			return "", err
-		}
-		if os.SameFile(info, entryInfo) {
-			if actual != "" {
-				return "", fmt.Errorf("ambiguous filename alias %q in %q", name, d.path)
-			}
-			actual = candidate
-		}
-	}
-	if actual == "" {
-		return "", fmt.Errorf("cannot identify directory entry %q in %q", name, d.path)
-	}
-	return actual, nil
+	return nil
 }
 
 func foldedName(name string) string {

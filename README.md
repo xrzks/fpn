@@ -1,97 +1,72 @@
 # fpn
 
-A small Go CLI that normalizes filenames: lowercases the base name, replaces spaces and underscores with `-`, leaves parent directories untouched, and skips `.git` and `.DS_Store`.
+A small Go CLI that normalizes filenames: lowercases names, replaces whitespace and underscores with `-`, and skips `.git` and `.DS_Store`.
 
 ## Install
 
-```
+```sh
 go install github.com/xrzks/fpn@latest
 ```
 
 ## Usage
 
+```text
+fpn [--dry] [-r] <path>
 ```
-fpn [--dry] [--recursive] <path>...
-```
 
-- `--dry` — print what would happen, without renaming anything. Collisions and other errors still produce a non-zero exit status.
-- `--recursive`, `-r` — also rename everything nested inside directory arguments (files and subdirectories, at every depth). The directory argument itself is renamed too. Without this flag, each argument, file or directory, is a single entry and nothing inside a directory is read or touched.
+Exactly one path is required.
 
-- `--help`, `-h` — show command usage and available flags.
+- Without `-r`, rename one file, symlink, or directory. A directory's contents are not processed.
+- `--recursive`, `-r` — for a directory, rename files and symlinks inside it at every depth. Never rename directories, including the selected root. Symlinked directories are not traversed; a symlink supplied as the path is treated as one link.
+- `--dry` — validate the entire plan and print proposed renames without changing anything. Any collision or planning error fails the run; no partial safe subset is applied.
+- `--help`, `-h` — show usage and flags.
 
-Use `--` before paths beginning with a dash (for example, `fpn -- "-My File.txt"`).
-
-Directories are renamed after their contents, so nested paths are moved along with their (already normalized) parent.
-
-**Breaking change:** the `--dirs` flag has been removed. Directories are now ordinary entries, subject to the same rule as files. Passing `--dirs` is an error.
+Use `--` before a path beginning with a dash: `fpn -- "-My File.txt"`.
 
 ## Behavior
 
-- Only the final path component of each entry is renamed. Parent directories are left as-is.
-- Leading and trailing whitespace is trimmed. The base name is lowercased, runs of whitespace are collapsed to a single space, then every space and underscore becomes `-`. Runs of two or more hyphens are then collapsed to a single `-`. Examples:
-  - `My File.txt` → `my-file.txt`
-  - `Another_File.md` → `another-file.md`
-  - `Mixed_Case  Foo.MD` → `mixed-case-foo.md`
-  - `hello -world` → `hello-world`
-  - `a  -  b` → `a-b`
-- A trailing slash on an argument is ignored (`fpn "Test Dir/"` is the same as `fpn "Test Dir"`). Parent components are resolved before simplifying `..`, so paths through symlinks select the correct entry. Reports may use resolved paths for such arguments.
-- Empty path arguments are rejected before any traversal or renames, including when mixed with valid paths. Use `.` explicitly to select the current directory.
-- `.` and `..` normalize to themselves, so they are never renamed. With `--recursive` their contents are still walked. To rename the current directory, run `fpn` from its parent.
-- `.git` and `.DS_Store` are always skipped, including case variants, explicit descendants, and descendants reached through parent symlink aliases.
-- Recursion renames directories too (everything except `.git` and `.DS_Store`, including e.g. `node_modules`). There is no files-only mode, so run with `--dry` first.
-- Duplicate paths (the same path given twice, or overlapping arguments such as `-r Dir Dir/Sub`) are processed once.
-- If a normalized name already exists on disk as a different file, `fpn` reports a collision and leaves that pair alone — but other safe renames in the same run still proceed and the process exits non-zero so scripts can detect the partial failure.
-- Renames atomically refuse to replace a destination created after planning, including during a case-only rename. Linux uses `renameat2(RENAME_NOREPLACE)`, macOS uses `renamex_np(RENAME_EXCL)`, and Windows uses `MoveFileEx` without replacement. Other platforms, or kernels/filesystems without the required operation, fail safely instead of falling back to an overwriting rename. Execution errors stop the run; earlier renames are not rolled back.
-- If a case-only rename cannot finish, `fpn` attempts to restore the original name without replacing any new entry there. If restoration also fails, the error reports the temporary path where the source is preserved for manual recovery.
-- If several entries would normalize to the same name (e.g. `A b` and `a_b` both become `a-b`), `fpn` reports one collision naming the target and all sources, and renames none of them. This counts toward the non-zero exit.
-- Arguments identify stored directory-entry names, even when supplied under different case. Case and Unicode-normalization aliases are checked using the parent filesystem's lookup behavior. A destination alias of the source is renamed via a temporary name; separate entries, including hard links and symlinks (even dangling ones), are collisions. Unsupported or ambiguous source aliases, such as Windows short-name aliases, are rejected rather than guessed.
-- Planning reads each parent directory once to identify stored names and aliases. Unreadable parents are errors. A dry run validates the plan, not permissions or the availability of the platform's rename operation.
-- Symlinks are renamed as links, without following them or changing their stored targets. Recursive walks do not traverse symlinked directories.
-- On success (or partial success), a table of `ORIGINAL` → `NORMALIZED` is printed. Execution failures still report earlier completed renames. Paths containing control characters or invalid UTF-8 are quoted and escaped; output failures produce a non-zero exit status.
+- Only an entry's basename changes; parent directories are untouched. Leading and trailing whitespace is trimmed, whitespace runs become `-`, underscores become `-`, names are lowercased, and repeated hyphens collapse. For example, `Mixed_Case  Foo.MD` becomes `mixed-case-foo.md`.
+- `.git` and `.DS_Store` are excluded, including case variants, descendants, and paths through aliases.
+- Source basenames must exactly match their stored spelling. Case and Unicode-normalization aliases are rejected. A normalized destination that aliases the source is also rejected, so case-only renames on case-insensitive filesystems are not supported.
+- Any traversal error, planning error, or collision aborts before any renames. Destinations are never overwritten. A runtime failure stops execution, but earlier completed renames are not rolled back.
+- Reports use resolved absolute physical paths, preserving a final symlink as an entry rather than following it. Unsafe path characters are escaped.
+- Run against a stable tree: no-overwrite protection does not protect sources or parent directories from concurrent replacement. A dry run validates the plan, not whether later execution will succeed.
 
-Run against a stable tree: atomic no-replace protects destinations, but does not pin source entries or parent directories against concurrent replacement. There is no crash-recovery journal. Interrupting a case-only rename can leave the source at `.fpn-*/entry` in its original parent; inspect that location before removing temporary directories.
+See [detailed filesystem behavior](docs/behavior.md) for path resolution, collision checks, exclusions, and platform guarantees.
 
-## Example
+## Examples
 
-Given this tree:
+Rename a single entry, including a directory without processing its contents:
 
+```sh
+fpn --dry "My File.txt"
+fpn "Test Dir"
 ```
+
+For a separate recursive example, start with:
+
+```text
 Test Dir/
-  Child One/file.txt
-  Child Two/
+  Child One/My File.txt
+  Child Two/Another_File.md
 ```
 
-```
-$ fpn --dry "Test Dir"
-ORIGINAL  NORMALIZED
-Test Dir  test-dir
+Preview and apply:
 
-$ fpn --dry --recursive "Test Dir"
-ORIGINAL            NORMALIZED
-Test Dir            test-dir
-Test Dir/Child One  Test Dir/child-one
-Test Dir/Child Two  Test Dir/child-two
-
-$ fpn --recursive "Test Dir"
+```sh
+fpn --dry -r "Test Dir"
+fpn -r "Test Dir"
 ```
 
-Result:
+Result (all directory names are preserved):
 
-```
-test-dir/
-  child-one/file.txt
-  child-two/
-```
-
-`Child One/file.txt` is already normalized, so it does not appear in the table. Parent components in the table are the original, on-disk paths; deepest paths are renamed first.
-
-To rename the entries directly inside the current directory, use shell globbing (each matched directory is renamed as a single entry, not expanded):
-
-```
-fpn ./*        # add ./.* to include dotfiles
+```text
+Test Dir/
+  Child One/my-file.txt
+  Child Two/another-file.md
 ```
 
-To rename an entire tree, use `fpn --recursive .` (`.` itself is not renamed).
+Use `fpn -r .` to process files and symlinks throughout the current tree while preserving directories. Shell globs that expand to multiple paths are not accepted as a single invocation.
 
 ## Development
 

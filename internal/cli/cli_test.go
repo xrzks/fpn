@@ -18,7 +18,7 @@ func TestHelp(t *testing.T) {
 			if err := cmd.Run(context.Background(), []string{"fpn", flag}); err != nil {
 				t.Fatal(err)
 			}
-			for _, want := range []string{"fpn", "<path>...", "--dry", "--recursive", "-r", "--help"} {
+			for _, want := range []string{"fpn", "<path>", "--dry", "--recursive", "-r", "--help", "leaving all directories unchanged"} {
 				if !strings.Contains(out.String(), want) {
 					t.Errorf("help missing %q: %s", want, &out)
 				}
@@ -31,7 +31,7 @@ func TestHelp(t *testing.T) {
 }
 
 func TestInvalidArguments(t *testing.T) {
-	for _, args := range [][]string{nil, {"--dirs"}, {"--unknown"}, {"--dry=invalid"}} {
+	for _, args := range [][]string{nil, {"--unknown"}, {"--dry=invalid"}} {
 		t.Run(strings.Join(args, " "), func(t *testing.T) {
 			var out, diagnostics bytes.Buffer
 			cmd := New()
@@ -65,7 +65,7 @@ func TestEmptyPathRejectedBeforeMutations(t *testing.T) {
 	}
 
 	for _, flags := range [][]string{nil, {"-r"}, {"--dry"}, {"--dry", "-r"}} {
-		for _, paths := range [][]string{{""}, {"My File", ""}, {"", "My File"}} {
+		for _, paths := range [][]string{{""}, {"My File", ""}, {"", "My File"}, {"My File", "Other File"}, {"My File", "My File"}} {
 			args := append([]string{"fpn"}, flags...)
 			args = append(args, paths...)
 			t.Run(strings.Join(args, "/"), func(t *testing.T) {
@@ -73,8 +73,12 @@ func TestEmptyPathRejectedBeforeMutations(t *testing.T) {
 				cmd := New()
 				cmd.Writer, cmd.ErrWriter = &out, &diagnostics
 				err := cmd.Run(context.Background(), args)
-				if err == nil || !strings.Contains(err.Error(), "path argument must not be empty") {
-					t.Fatalf("expected empty path error, got %v", err)
+				want := "path argument must not be empty"
+				if len(paths) != 1 {
+					want = "exactly one"
+				}
+				if err == nil || !strings.Contains(err.Error(), want) {
+					t.Fatalf("expected %q error, got %v", want, err)
 				}
 				if out.Len() != 0 || diagnostics.Len() != 0 {
 					t.Fatalf("unexpected output: stdout=%q stderr=%q", &out, &diagnostics)
@@ -118,16 +122,25 @@ func TestRenameFlags(t *testing.T) {
 					t.Fatal(err)
 				}
 				wantRoot, wantChild := "test-dir", "Child File"
-				if dry {
+				if dry || recursive != "" {
 					wantRoot = "Test Dir"
-				} else if recursive != "" {
+				}
+				if !dry && recursive != "" {
 					wantChild = "child-file"
 				}
 				content, err := os.ReadFile(filepath.Join(base, wantRoot, wantChild))
 				if err != nil || string(content) != "content" {
 					t.Fatalf("content=%q error=%v", content, err)
 				}
-				if !strings.Contains(out.String(), "ORIGINAL") || !strings.Contains(out.String(), "test-dir") {
+				wantReported := "test-dir"
+				if recursive != "" {
+					wantReported = "child-file"
+				}
+				physicalBase, err := filepath.EvalSymlinks(base)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if !strings.Contains(out.String(), "ORIGINAL") || !strings.Contains(out.String(), wantReported) || !strings.Contains(out.String(), physicalBase) {
 					t.Fatalf("missing rename table: %s", &out)
 				}
 				if diagnostics.Len() != 0 {

@@ -13,7 +13,7 @@ func New() *cli.Command {
 	return &cli.Command{
 		Name:      "fpn",
 		Usage:     "Normalize file and directory names",
-		ArgsUsage: "<path>...",
+		ArgsUsage: "<path>",
 		Flags: []cli.Flag{
 			&cli.BoolFlag{
 				Name:  "dry",
@@ -22,7 +22,7 @@ func New() *cli.Command {
 			&cli.BoolFlag{
 				Name:    "recursive",
 				Aliases: []string{"r"},
-				Usage:   "also rename everything nested inside directory arguments",
+				Usage:   "recursively rename files and symlinks, leaving all directories unchanged",
 			},
 		},
 		// Return errors to main without printing them twice or exiting here.

@@ -9,25 +9,25 @@ import (
 	"strings"
 )
 
+// NormalizePaths preflights the entire batch before reporting or executing any
+// renames. Recursive callers supply only files; a nonrecursive caller may supply
+// an explicit directory.
 func NormalizePaths(paths []string, config Config) error {
 	type entryID struct {
 		parent *directory
 		name   string
 	}
 	type planItem struct {
-		report, exec renameOp
-		parent       *directory
-		source       string
-		target       entryID
+		op     renameOp
+		target entryID
 	}
 	var cache directoryCache
 	var plan []planItem
-	seen := make(map[entryID]bool)
 	for _, path := range paths {
 		if path == "" {
 			return fmt.Errorf("fpn: invalid normalized basename for empty path")
 		}
-		display, physical, special, err := resolveWalkRoot(path)
+		physical, special, err := resolveWalkRoot(path)
 		if err != nil {
 			return fmt.Errorf("fpn: resolve %s: %w", displayPath(path), err)
 		}
@@ -38,12 +38,11 @@ func NormalizePaths(paths []string, config Config) error {
 		if err != nil {
 			return fmt.Errorf("fpn: resolve parent of %s: %w", displayPath(path), err)
 		}
-		info, err := os.Lstat(physical)
-		if err != nil {
-			return fmt.Errorf("fpn: %s: %w", displayPath(path), err)
+		if _, err := os.Lstat(physical); err != nil {
+			return fmt.Errorf("fpn: %s: %w", displayPath(physical), err)
 		}
-		base, err := d.actualName(filepath.Base(physical), info)
-		if err != nil {
+		base := filepath.Base(physical)
+		if err := d.validateSource(base); err != nil {
 			return err
 		}
 		if shouldSkip(base) || hasSkippedComponent(d.path) {
@@ -54,18 +53,11 @@ func NormalizePaths(paths []string, config Config) error {
 			continue
 		}
 		if normalized == "" || normalized == "." || normalized == ".." {
-			return fmt.Errorf("fpn: invalid normalized basename %q for %q: must not be empty, . or ..", normalized, path)
+			return fmt.Errorf("fpn: invalid normalized basename %q for %q: must not be empty, . or ..", normalized, physical)
 		}
-		source := entryID{d, base}
-		if seen[source] {
-			continue
-		}
-		seen[source] = true
-		dir, _ := filepath.Split(display)
 		plan = append(plan, planItem{
-			report: renameOp{from: dir + base, to: dir + normalized},
-			exec:   renameOp{from: filepath.Join(d.path, base), to: filepath.Join(d.path, normalized)},
-			parent: d, source: base, target: entryID{d, d.nameKey(normalized)},
+			op:     renameOp{from: filepath.Join(d.path, base), to: filepath.Join(d.path, normalized)},
+			target: entryID{d, d.nameKey(normalized)},
 		})
 	}
 
@@ -73,86 +65,53 @@ func NormalizePaths(paths []string, config Config) error {
 	for _, item := range plan {
 		byTarget[item.target] = append(byTarget[item.target], item)
 	}
-	var pending []planItem
 	var conflicts []string
-	skipped := 0
 	for _, items := range byTarget {
 		if len(items) > 1 {
 			var sources []string
 			for _, item := range items {
-				sources = append(sources, displayPath(item.report.from))
+				sources = append(sources, displayPath(item.op.from))
 			}
 			sort.Strings(sources)
 			conflicts = append(conflicts, fmt.Sprintf("collision: %s would be produced by multiple sources: %s",
-				displayPath(items[0].report.to), strings.Join(sources, ", ")))
-			skipped += len(items)
+				displayPath(items[0].op.to), strings.Join(sources, ", ")))
 			continue
 		}
 		item := items[0]
-		info, err := os.Lstat(item.exec.to)
+		_, err := os.Lstat(item.op.to)
 		if os.IsNotExist(err) {
-			pending = append(pending, item)
 			continue
 		}
 		if err != nil {
-			return fmt.Errorf("fpn: inspect destination %s: %w", displayPath(item.report.to), err)
+			return fmt.Errorf("fpn: inspect destination %s: %w", displayPath(item.op.to), err)
 		}
-		name, err := item.parent.actualName(filepath.Base(item.exec.to), info)
-		// An existing destination whose entry cannot be identified safely is
-		// a collision, not grounds to abandon unrelated safe operations.
-		if err == nil && name == item.source {
-			item.exec.caseOnly = true
-			pending = append(pending, item)
-			continue
-		}
-		conflicts = append(conflicts, fmt.Sprintf("collision: %s would overwrite existing file (from %s)",
-			displayPath(item.report.to), displayPath(item.report.from)))
-		skipped++
+		// Any existing destination is unsupported, even a lookup alias of
+		// the source. Never use inode equality to excuse hardlinks or symlinks.
+		conflicts = append(conflicts, fmt.Sprintf("collision: %s would overwrite existing file or alias (from %s)",
+			displayPath(item.op.to), displayPath(item.op.from)))
 	}
-
-	finish := func(completed []renameOp, operationErr error) error {
-		sort.Slice(completed, func(i, j int) bool { return completed[i].from < completed[j].from })
-		var collisionErr error
-		if len(conflicts) > 0 {
-			verb := "renamed"
-			if config.DryRun {
-				verb = "would rename"
+	if len(conflicts) > 0 {
+		sort.Strings(conflicts)
+		collisionErr := fmt.Errorf("%d collision(s); no renames performed", len(conflicts))
+		for _, conflict := range conflicts {
+			if _, err := fmt.Fprintln(config.errWriter(), conflict); err != nil {
+				return errors.Join(collisionErr, fmt.Errorf("fpn: write diagnostics: %w", err))
 			}
-			collisionErr = fmt.Errorf("%d collision(s); %s %d, skipped %d", len(conflicts), verb, len(completed), skipped)
 		}
-		return errors.Join(operationErr, collisionErr, logRenames(completed, config.writer()))
-	}
-	sort.Strings(conflicts)
-	for _, conflict := range conflicts {
-		if _, err := fmt.Fprintln(config.errWriter(), conflict); err != nil {
-			return finish(nil, fmt.Errorf("fpn: write diagnostics: %w", err))
-		}
-	}
-	if config.DryRun {
-		var reports []renameOp
-		for _, item := range pending {
-			reports = append(reports, item.report)
-		}
-		return finish(reports, nil)
+		return collisionErr
 	}
 
-	// Execute deepest physical paths first, independent of argument spelling.
-	sort.Slice(pending, func(i, j int) bool {
-		a, b := pending[i].exec.from, pending[j].exec.from
-		da, db := strings.Count(a, string(filepath.Separator)), strings.Count(b, string(filepath.Separator))
-		if da != db {
-			return da > db
-		}
-		return a < b
-	})
+	sort.Slice(plan, func(i, j int) bool { return plan[i].op.from < plan[j].op.from })
 	var completed []renameOp
-	for _, item := range pending {
-		if err := renameOne(item.exec); err != nil {
-			return finish(completed, err)
+	for _, item := range plan {
+		if !config.DryRun {
+			if err := renameOne(item.op); err != nil {
+				return errors.Join(err, logRenames(completed, config.writer()))
+			}
 		}
-		completed = append(completed, item.report)
+		completed = append(completed, item.op)
 	}
-	return finish(completed, nil)
+	return logRenames(completed, config.writer())
 }
 
 func normalizePathName(path string) string {

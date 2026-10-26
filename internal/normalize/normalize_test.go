@@ -1,6 +1,7 @@
 package normalize
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -245,7 +246,7 @@ func missing(t *testing.T, base string, rel ...string) {
 // exampleTree builds the tree from the change spec.
 func exampleTree(t *testing.T) string {
 	t.Helper()
-	base := t.TempDir()
+	base := physicalDir(t, t.TempDir())
 	mkdirs(t, base, "Test Dir/Child One", "Test Dir/Child Two")
 	touch(t, base, "Test Dir/Child One/file.txt")
 	return base
@@ -258,7 +259,7 @@ func exampleTree(t *testing.T) string {
 func TestWalkNonRecursiveDirIsSingleEntry(t *testing.T) {
 	base := exampleTree(t)
 	root := filepath.Join(base, "Test Dir")
-	got, err := Walk([]string{root}, Config{})
+	got, err := Walk(root, Config{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -266,7 +267,7 @@ func TestWalkNonRecursiveDirIsSingleEntry(t *testing.T) {
 }
 
 func TestWalkNonRecursiveDoesNotReadDir(t *testing.T) {
-	base := t.TempDir()
+	base := physicalDir(t, t.TempDir())
 	root := filepath.Join(base, "Dir")
 	child := filepath.Join(root, "locked")
 	mkdirs(t, root, "locked")
@@ -275,34 +276,29 @@ func TestWalkNonRecursiveDoesNotReadDir(t *testing.T) {
 	}
 	t.Cleanup(func() { os.Chmod(child, 0o755) })
 
-	got, err := walkRoot(root, Config{})
+	got, err := Walk(root, Config{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	assertPaths(t, got, []string{root})
 }
 
-func TestWalkRecursiveIncludesRootAndAllDepths(t *testing.T) {
+func TestWalkRecursiveIncludesOnlyFilesAtAllDepths(t *testing.T) {
 	base := exampleTree(t)
 	root := filepath.Join(base, "Test Dir")
-	got, err := Walk([]string{root}, Config{Recursive: true})
+	got, err := Walk(root, Config{Recursive: true})
 	if err != nil {
 		t.Fatal(err)
 	}
-	assertPaths(t, got, []string{
-		root,
-		filepath.Join(root, "Child One"),
-		filepath.Join(root, "Child One", "file.txt"),
-		filepath.Join(root, "Child Two"),
-	})
+	assertPaths(t, got, []string{filepath.Join(root, "Child One", "file.txt")})
 }
 
 func TestWalkFileArgument(t *testing.T) {
-	base := t.TempDir()
+	base := physicalDir(t, t.TempDir())
 	touch(t, base, "A.txt")
 	f := filepath.Join(base, "A.txt")
 	for _, rec := range []bool{false, true} {
-		got, err := Walk([]string{f}, Config{Recursive: rec})
+		got, err := Walk(f, Config{Recursive: rec})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -311,27 +307,26 @@ func TestWalkFileArgument(t *testing.T) {
 }
 
 func TestWalkSkipsGitAndDSStore(t *testing.T) {
-	base := t.TempDir()
+	base := physicalDir(t, t.TempDir())
 	mkdirs(t, base, "Dir/.git/objects")
 	touch(t, base, "Dir/.git/HEAD", "Dir/.DS_Store", "Dir/a.txt")
 	root := filepath.Join(base, "Dir")
 
-	// As root arguments.
-	got, err := Walk([]string{
-		filepath.Join(root, ".git"),
-		filepath.Join(root, ".DS_Store"),
-	}, Config{Recursive: true})
-	if err != nil {
-		t.Fatal(err)
+	// As individual root arguments.
+	for _, name := range []string{".git", ".DS_Store"} {
+		got, err := Walk(filepath.Join(root, name), Config{Recursive: true})
+		if err != nil {
+			t.Fatal(err)
+		}
+		assertPaths(t, got, nil)
 	}
-	assertPaths(t, got, nil)
 
 	// During a recursive walk.
-	got, err = Walk([]string{root}, Config{Recursive: true})
+	got, err := Walk(root, Config{Recursive: true})
 	if err != nil {
 		t.Fatal(err)
 	}
-	assertPaths(t, got, []string{root, filepath.Join(root, "a.txt")})
+	assertPaths(t, got, []string{filepath.Join(root, "a.txt")})
 }
 
 func TestWalkTrailingSlash(t *testing.T) {
@@ -339,11 +334,11 @@ func TestWalkTrailingSlash(t *testing.T) {
 	chdir(t, base)
 	for _, rec := range []bool{false, true} {
 		cfg := Config{Recursive: rec}
-		a, err := Walk([]string{"Test Dir/"}, cfg)
+		a, err := Walk("Test Dir/", cfg)
 		if err != nil {
 			t.Fatal(err)
 		}
-		b, err := Walk([]string{"Test Dir"}, cfg)
+		b, err := Walk("Test Dir", cfg)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -351,33 +346,14 @@ func TestWalkTrailingSlash(t *testing.T) {
 	}
 }
 
-func TestWalkDedupe(t *testing.T) {
-	base := exampleTree(t)
-	root := filepath.Join(base, "Test Dir")
-
-	got, err := Walk([]string{root, root}, Config{})
+func TestWalkRecursiveEmptyDirectoriesProduceNoRenames(t *testing.T) {
+	base := t.TempDir()
+	mkdirs(t, base, "Root Dir/Empty Child")
+	got, err := Walk(filepath.Join(base, "Root Dir"), Config{Recursive: true})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(got, []string{root}) {
-		t.Fatalf("got %v", got)
-	}
-
-	sub := filepath.Join(root, "Child One")
-	got, err = Walk([]string{root, sub}, Config{Recursive: true})
-	if err != nil {
-		t.Fatal(err)
-	}
-	seen := map[string]bool{}
-	for _, p := range got {
-		if seen[p] {
-			t.Errorf("duplicate entry %s", p)
-		}
-		seen[p] = true
-	}
-	if len(got) != 4 {
-		t.Errorf("expected 4 entries, got %v", got)
-	}
+	assertPaths(t, got, nil)
 }
 
 // ---------------------------------------------------------------------------
@@ -400,15 +376,15 @@ func TestRunRecursiveExampleTree(t *testing.T) {
 	if err := Run([]string{"Test Dir"}, Config{Recursive: true}); err != nil {
 		t.Fatal(err)
 	}
-	exists(t, base, "test-dir/child-one/file.txt", "test-dir/child-two")
-	missing(t, base, "Test Dir", "test-dir/Child One", "test-dir/Child Two")
+	exists(t, base, "Test Dir/Child One/file.txt", "Test Dir/Child Two")
+	missing(t, base, "test-dir")
 }
 
 func TestRunDuplicateTargets(t *testing.T) {
 	base := t.TempDir()
 	touch(t, base, "A b", "a_b")
 	chdir(t, base)
-	if err := Run([]string{"A b", "a_b"}, Config{}); err == nil {
+	if err := Run([]string{"."}, Config{Recursive: true}); err == nil {
 		t.Fatal("expected collision error")
 	}
 	exists(t, base, "A b", "a_b")
@@ -452,7 +428,7 @@ func TestRunAliasedParentCollision(t *testing.T) {
 						t.Fatal(err)
 					}
 				}
-				if err := Run([]string{"A b", other}, Config{DryRun: dry}); err == nil {
+				if err := NormalizePaths([]string{"A b", other}, Config{DryRun: dry}); err == nil {
 					t.Fatal("expected alias collision error")
 				}
 				for source, want := range map[string]string{"A b": "first", "a_b": "second"} {
@@ -469,34 +445,32 @@ func TestRunAliasedParentCollision(t *testing.T) {
 	}
 }
 
-func TestRunSameSourceAliases(t *testing.T) {
+func TestRunReportsPhysicalParent(t *testing.T) {
 	for _, dry := range []bool{true, false} {
 		t.Run(map[bool]string{true: "dry", false: "rename"}[dry], func(t *testing.T) {
 			base := t.TempDir()
-			chdir(t, base)
-			if err := os.WriteFile("My File", []byte("source content"), 0o644); err != nil {
+			touch(t, base, "My File")
+			physical, err := filepath.EvalSymlinks(base)
+			if err != nil {
 				t.Fatal(err)
 			}
-			args := []string{"My File", filepath.Join(base, "My File")}
 			link := filepath.Join(t.TempDir(), "alias")
-			if err := os.Symlink(base, link); err == nil {
-				args = append(args, filepath.Join(link, "My File"))
-			} else {
-				t.Logf("cannot test symlink alias: %v", err)
+			if err := os.Symlink(base, link); err != nil {
+				t.Skipf("cannot create parent symlink: %v", err)
 			}
-			if err := Run(args, Config{DryRun: dry}); err != nil {
-				t.Fatalf("same-source aliases should not collide or execute twice: %v", err)
+			var out bytes.Buffer
+			if err := Run([]string{filepath.Join(link, "My File")}, Config{DryRun: dry, Writer: &out}); err != nil {
+				t.Fatal(err)
 			}
-			wantPath, absentPath := "my-file", "My File"
+			if !strings.Contains(out.String(), filepath.Join(physical, "My File")) || !strings.Contains(out.String(), filepath.Join(physical, "my-file")) || strings.Contains(out.String(), link) {
+				t.Fatalf("report must use physical absolute paths: %q", out.String())
+			}
 			if dry {
-				wantPath, absentPath = absentPath, wantPath
-			}
-			got, err := os.ReadFile(wantPath)
-			if err != nil || string(got) != "source content" {
-				t.Fatalf("content=%q, err=%v", got, err)
-			}
-			if _, err := os.Lstat(absentPath); !os.IsNotExist(err) {
-				t.Fatalf("unexpected entry %q: %v", absentPath, err)
+				exists(t, base, "My File")
+				missing(t, base, "my-file")
+			} else {
+				exists(t, base, "my-file")
+				missing(t, base, "My File")
 			}
 		})
 	}
@@ -512,7 +486,7 @@ func TestNormalizePathsInvalidBasenames(t *testing.T) {
 				touch(t, base, "Safe File", name)
 				// Include a valid operation first to verify validation happens
 				// before any planned renames are executed.
-				err := Run([]string{"Safe File", name}, Config{DryRun: dry})
+				err := Run([]string{"."}, Config{Recursive: true, DryRun: dry})
 				if err == nil || !strings.Contains(err.Error(), "invalid normalized basename") {
 					t.Fatalf("expected invalid basename diagnostic, got %v", err)
 				}
@@ -559,7 +533,7 @@ func TestRunDryRunCollision(t *testing.T) {
 				other = "a_b"
 			}
 			touch(t, base, "A b", other, "Safe File")
-			if err := Run([]string{"A b", other, "Safe File"}, Config{DryRun: true}); err == nil {
+			if err := Run([]string{"."}, Config{Recursive: true, DryRun: true}); err == nil {
 				t.Fatal("expected dry-run collision error")
 			}
 			exists(t, base, "A b", other, "Safe File")
@@ -612,48 +586,25 @@ func TestRunPreservesDestinationLinks(t *testing.T) {
 	}
 }
 
-func TestRunChildFirstAcrossPathAliases(t *testing.T) {
-	for _, alias := range []string{"mixed paths", "symlink parent", "renamed symlink parent"} {
-		t.Run(alias, func(t *testing.T) {
-			base := t.TempDir()
-			chdir(t, base)
-			parent := "Parent"
-			child := filepath.Join(parent, "Child File")
-			if alias != "mixed paths" {
-				parent = filepath.Join("deep", "nested", "Parent")
-				child = filepath.Join("Alias", "Child File")
-			}
-			mkdirs(t, base, parent)
-			touch(t, base, filepath.Join(parent, "Child File"))
-			paths := []string{filepath.Join(base, parent), child}
-			if alias != "mixed paths" {
-				if err := os.Symlink(parent, "Alias"); err != nil {
-					t.Skipf("cannot create parent symlink: %v", err)
-				}
-				if alias == "renamed symlink parent" {
-					paths = append(paths, "Alias")
-				}
-			}
-			if err := Run(paths, Config{DryRun: true}); err != nil {
-				t.Fatalf("dry run: %v", err)
-			}
-			exists(t, base, filepath.Join(parent, "Child File"))
-			if err := Run(paths, Config{}); err != nil {
-				t.Fatalf("real run: %v", err)
-			}
-			normalizedParent := filepath.Join(filepath.Dir(parent), "parent")
-			exists(t, base, filepath.Join(normalizedParent, "child-file"))
-			missing(t, base, parent, filepath.Join(normalizedParent, "Child File"))
-			if alias == "renamed symlink parent" {
-				// Renaming the link must not resolve its final component or
-				// rewrite its stored target, even though that target moved.
-				target, err := os.Readlink("alias")
-				if err != nil || target != parent {
-					t.Fatalf("symlink target=%q, err=%v", target, err)
-				}
-				missing(t, base, "Alias")
-			}
-		})
+func TestRunRecursivePreservesDirectoriesAndSymlinkTargets(t *testing.T) {
+	base := t.TempDir()
+	chdir(t, base)
+	mkdirs(t, base, "Parent/Child Dir")
+	touch(t, base, "Parent/Child Dir/Child File")
+	if err := os.Symlink("Child Dir", "Parent/My Link"); err != nil {
+		t.Skipf("cannot create symlink: %v", err)
+	}
+	if err := Run([]string{"Parent"}, Config{Recursive: true, DryRun: true}); err != nil {
+		t.Fatal(err)
+	}
+	exists(t, base, "Parent/Child Dir/Child File", "Parent/My Link")
+	if err := Run([]string{"Parent"}, Config{Recursive: true}); err != nil {
+		t.Fatal(err)
+	}
+	exists(t, base, "Parent/Child Dir/child-file", "Parent/my-link")
+	missing(t, base, "parent", "Parent/Child Dir/Child File", "Parent/My Link")
+	if target, err := os.Readlink("Parent/my-link"); err != nil || target != "Child Dir" {
+		t.Fatalf("symlink target=%q, err=%v", target, err)
 	}
 }
 
@@ -678,7 +629,16 @@ func TestRunCaseOnlyDirRename(t *testing.T) {
 	mkdirs(t, base, "MyDir")
 	touch(t, base, "MyDir/f.txt")
 	chdir(t, base)
-	if err := Run([]string{"MyDir"}, Config{}); err != nil {
+	_, aliasErr := os.Lstat("mydir")
+	err := Run([]string{"MyDir"}, Config{})
+	if aliasErr == nil {
+		if err == nil {
+			t.Fatal("destination alias must fail preflight")
+		}
+		exists(t, base, "MyDir/f.txt")
+		return
+	}
+	if err != nil {
 		t.Fatal(err)
 	}
 	entries, err := os.ReadDir(base)

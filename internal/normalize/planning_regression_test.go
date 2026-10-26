@@ -25,8 +25,11 @@ func TestRunRecursiveDotPreservesRoot(t *testing.T) {
 	}
 	exists(t, base, "Root Dir/child-file")
 	missing(t, base, "root-dir", "Root Dir/Child File")
-	if got, want := out.String(), "ORIGINAL    NORMALIZED\nChild File  child-file\n"; got != want {
-		t.Fatalf("report = %q, want %q", got, want)
+	from := filepath.Join(physicalDir(t, root), "Child File")
+	to := filepath.Join(physicalDir(t, root), "child-file")
+	want := fmt.Sprintf("%-*sNORMALIZED\n%s  %s\n", len(from)+2, "ORIGINAL", from, to)
+	if out.String() != want {
+		t.Fatalf("report = %q, want %q", out.String(), want)
 	}
 }
 
@@ -51,14 +54,15 @@ func TestRunReportsOnlyCompletedRenamesOnFailure(t *testing.T) {
 		t.Fatalf("permission probe: %v", err)
 	}
 	var out bytes.Buffer
-	// Execution sorts physical paths, so good completes even with reversed args.
-	err := Run([]string{"locked/B File", "good/A File"}, Config{Writer: &out})
+	// Both directories are readable during preflight; execution reaches good first.
+	err := Run([]string{"."}, Config{Recursive: true, Writer: &out})
 	if !errors.Is(err, os.ErrPermission) {
 		t.Fatalf("Run error = %v, want permission failure", err)
 	}
 	exists(t, base, "good/a-file", "locked/B File")
 	missing(t, base, "good/A File", "locked/b-file")
-	from, to := filepath.Join("good", "A File"), filepath.Join("good", "a-file")
+	physical := physicalDir(t, base)
+	from, to := filepath.Join(physical, "good", "A File"), filepath.Join(physical, "good", "a-file")
 	want := fmt.Sprintf("%-*sNORMALIZED\n%s  %s\n", len(from)+2, "ORIGINAL", from, to)
 	if out.String() != want {
 		t.Fatalf("report = %q, want only completed rename %q", out.String(), want)
@@ -93,8 +97,8 @@ func TestRunCollisionDiagnosticFailurePreventsMutations(t *testing.T) {
 	touch(t, base, "A File", "a_file", "Safe File")
 	want := errors.New("diagnostics unavailable")
 	var out bytes.Buffer
-	err := Run([]string{"Safe File", "A File", "a_file"}, Config{
-		Writer: &out, ErrWriter: failingReportWriter{err: want},
+	err := Run([]string{"."}, Config{
+		Recursive: true, Writer: &out, ErrWriter: failingReportWriter{err: want},
 	})
 	if !errors.Is(err, want) {
 		t.Fatalf("Run error = %v, want %v", err, want)
@@ -191,9 +195,9 @@ func TestRunNativeCaseAliases(t *testing.T) {
 		want         string
 		report       string
 	}{
-		{"lower argument normalizes stored uppercase", "LICENSE", []string{"license"}, "license", "ORIGINAL  NORMALIZED\nLICENSE   license\n"},
-		{"upper argument preserves normalized entry", "license", []string{"LICENSE"}, "license", ""},
-		{"duplicate aliases rename once", "MyFile", []string{"MyFile", "MYFILE"}, "myfile", "ORIGINAL  NORMALIZED\nMyFile    myfile\n"},
+		{"lower source alias rejected", "LICENSE", []string{"license"}, "LICENSE", ""},
+		{"upper source alias rejected", "license", []string{"LICENSE"}, "license", ""},
+		{"case-only destination alias rejected", "MyFile", []string{"MyFile"}, "MyFile", ""},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			base := t.TempDir()
@@ -205,8 +209,8 @@ func TestRunNativeCaseAliases(t *testing.T) {
 			}
 			requirePlanningAlias(t, tt.stored, alternate)
 			var out bytes.Buffer
-			if err := Run(tt.args, Config{Writer: &out}); err != nil {
-				t.Fatal(err)
+			if err := Run(tt.args, Config{Writer: &out, ErrWriter: io.Discard}); err == nil {
+				t.Fatal("expected source or destination alias rejection")
 			}
 			assertPaths(t, planningEntryNames(t), []string{tt.want})
 			if out.String() != tt.report {
@@ -224,7 +228,7 @@ func TestRunCanonicalEquivalentTargetsBothRemainUnchanged(t *testing.T) {
 	requirePlanningAlias(t, composed, "Cafe\u0301 File")
 	before := planningEntryNames(t)
 	var out, diagnostics bytes.Buffer
-	err := Run([]string{composed, decomposed}, Config{Writer: &out, ErrWriter: &diagnostics})
+	err := Run([]string{"."}, Config{Recursive: true, Writer: &out, ErrWriter: &diagnostics})
 	if err == nil || !strings.Contains(err.Error(), "1 collision(s)") {
 		t.Fatalf("Run error = %v, want canonical-equivalence collision", err)
 	}
@@ -250,20 +254,20 @@ func TestRunCanonicalEquivalentHardlinkIsCollision(t *testing.T) {
 		t.Fatal(err)
 	}
 	var out, diagnostics bytes.Buffer
-	err = Run([]string{source, "Safe File"}, Config{Writer: &out, ErrWriter: &diagnostics})
+	err = Run([]string{"."}, Config{Recursive: true, Writer: &out, ErrWriter: &diagnostics})
 	if err == nil || !strings.Contains(err.Error(), "1 collision(s)") {
 		t.Fatalf("Run error = %v, want existing hardlink collision", err)
 	}
-	exists(t, base, source, destination, "safe-file")
-	missing(t, base, "Safe File")
+	exists(t, base, source, destination, "Safe File")
+	missing(t, base, "safe-file")
 	for _, name := range []string{source, destination} {
 		after, err := os.Lstat(name)
 		if err != nil || !os.SameFile(before, after) {
 			t.Fatalf("entry %q changed: info=%v, error=%v", name, after, err)
 		}
 	}
-	if got, want := out.String(), "ORIGINAL   NORMALIZED\nSafe File  safe-file\n"; got != want {
-		t.Fatalf("report = %q, want %q", got, want)
+	if out.Len() != 0 {
+		t.Fatalf("failed plan must not report proposed renames: %q", out.String())
 	}
 	if !strings.Contains(diagnostics.String(), "would overwrite existing file") {
 		t.Fatalf("diagnostics = %q, want existing-entry collision", diagnostics.String())

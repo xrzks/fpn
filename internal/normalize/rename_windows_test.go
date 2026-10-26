@@ -29,22 +29,14 @@ func TestRenameOneLongWindowsPath(t *testing.T) {
 		t.Fatal(err)
 	}
 	from := filepath.Join(dir, "SOURCE")
-	for _, caseOnly := range []bool{false, true} {
-		to := filepath.Join(dir, "destination")
-		if caseOnly {
-			to = filepath.Join(dir, "source")
-		}
-		if err := os.WriteFile(from, []byte("original"), 0600); err != nil {
-			t.Fatal(err)
-		}
-		if err := renameOne(renameOp{from: from, to: to, caseOnly: caseOnly}); err != nil {
-			t.Fatal(err)
-		}
-		if data, err := os.ReadFile(to); err != nil || string(data) != "original" {
-			t.Fatalf("source not preserved: %q, %v", data, err)
-		}
-		if err := os.Remove(to); err != nil {
-			t.Fatal(err)
-		}
+	to := filepath.Join(dir, "destination")
+	if err := os.WriteFile(from, []byte("original"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := renameOne(renameOp{from: from, to: to}); err != nil {
+		t.Fatal(err)
+	}
+	if data, err := os.ReadFile(to); err != nil || string(data) != "original" {
+		t.Fatalf("source not preserved: %q, %v", data, err)
 	}
 }

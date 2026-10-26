@@ -11,90 +11,54 @@ import (
 )
 
 func TestRenameOneDoesNotReplaceLateDestination(t *testing.T) {
-	for _, caseOnly := range []bool{false, true} {
-		for _, kind := range []string{"file", "directory", "dangling symlink"} {
-			name := kind
-			if caseOnly {
-				name += "/case-only"
-			}
-			t.Run(name, func(t *testing.T) {
-				dir := t.TempDir()
-				from, to := filepath.Join(dir, "SOURCE"), filepath.Join(dir, "source")
-				if kind == "directory" {
-					if err := os.Mkdir(from, 0700); err != nil {
-						t.Fatal(err)
-					}
-				} else if err := os.WriteFile(from, []byte("original"), 0600); err != nil {
-					t.Fatal(err)
-				}
-
-				// Capture the operation while the destination is absent, just as
-				// planning does. Use a distinct name on case-insensitive volumes
-				// so we can simulate a competing entry for the final move too.
-				if _, err := os.Lstat(to); err == nil {
-					to = filepath.Join(dir, "other")
-				}
-				op := renameOp{from: from, to: to, caseOnly: caseOnly}
-				switch kind {
-				case "file":
-					if err := os.WriteFile(to, []byte("competitor"), 0600); err != nil {
-						t.Fatal(err)
-					}
-				case "directory":
-					// An empty directory can also be overwritten by plain Rename.
-					if err := os.Mkdir(to, 0700); err != nil {
-						t.Fatal(err)
-					}
-				case "dangling symlink":
-					if err := os.Symlink("missing", to); err != nil {
-						t.Skipf("cannot create symlink: %v", err)
-					}
-				}
-				before, err := os.Lstat(to)
-				if err != nil {
-					t.Fatal(err)
-				}
-				if err := renameOne(op); !errors.Is(err, os.ErrExist) {
-					t.Fatalf("expected destination-exists error, got %v", err)
-				}
-				after, err := os.Lstat(to)
-				if err != nil || !os.SameFile(before, after) {
-					t.Fatalf("destination replaced: %v", err)
-				}
-				if kind != "directory" {
-					data, err := os.ReadFile(from)
-					if err != nil || string(data) != "original" {
-						t.Fatalf("source not restored: %q, %v", data, err)
-					}
-				} else if info, err := os.Stat(from); err != nil || !info.IsDir() {
-					t.Fatalf("source directory not restored: %v", err)
-				}
-				entries, err := os.ReadDir(dir)
-				if err != nil || len(entries) != 2 {
-					t.Fatalf("temporary entries left behind: %v, %v", entries, err)
-				}
-			})
-		}
-	}
-}
-
-func TestRenameOneCaseOnlySuccess(t *testing.T) {
-	for _, directory := range []bool{false, true} {
-		t.Run(map[bool]string{false: "file", true: "directory"}[directory], func(t *testing.T) {
+	for _, kind := range []string{"file", "directory", "dangling symlink"} {
+		t.Run(kind, func(t *testing.T) {
 			dir := t.TempDir()
-			from, to := filepath.Join(dir, "SOURCE"), filepath.Join(dir, "source")
-			if directory {
+			from, to := filepath.Join(dir, "Source File"), filepath.Join(dir, "source-file")
+			if kind == "directory" {
 				if err := os.Mkdir(from, 0700); err != nil {
 					t.Fatal(err)
 				}
 			} else if err := os.WriteFile(from, []byte("original"), 0600); err != nil {
 				t.Fatal(err)
 			}
-			if err := renameOne(renameOp{from: from, to: to, caseOnly: true}); err != nil {
+			// Simulate a destination created after planning.
+			op := renameOp{from: from, to: to}
+			switch kind {
+			case "file":
+				if err := os.WriteFile(to, []byte("competitor"), 0600); err != nil {
+					t.Fatal(err)
+				}
+			case "directory":
+				if err := os.Mkdir(to, 0700); err != nil {
+					t.Fatal(err)
+				}
+			case "dangling symlink":
+				if err := os.Symlink("missing", to); err != nil {
+					t.Skipf("cannot create symlink: %v", err)
+				}
+			}
+			before, err := os.Lstat(to)
+			if err != nil {
 				t.Fatal(err)
 			}
+			if err := renameOne(op); !errors.Is(err, os.ErrExist) {
+				t.Fatalf("expected destination-exists error, got %v", err)
+			}
+			after, err := os.Lstat(to)
+			if err != nil || !os.SameFile(before, after) {
+				t.Fatalf("destination replaced: %v", err)
+			}
+			if kind != "directory" {
+				data, err := os.ReadFile(from)
+				if err != nil || string(data) != "original" {
+					t.Fatalf("source changed: %q, %v", data, err)
+				}
+			} else if info, err := os.Stat(from); err != nil || !info.IsDir() {
+				t.Fatalf("source directory changed: %v", err)
+			}
 			entries, err := os.ReadDir(dir)
-			if err != nil || len(entries) != 1 || entries[0].Name() != "source" {
+			if err != nil || len(entries) != 2 {
 				t.Fatalf("unexpected entries: %v, %v", entries, err)
 			}
 		})
