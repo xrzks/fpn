@@ -17,7 +17,7 @@ func Walk(root string, config Config) ([]string, error) {
 	}
 	physical, special, err := resolveWalkRoot(root)
 	if err != nil {
-		return nil, fmt.Errorf("fpn: %s: %w", displayPath(root), err)
+		return nil, rootPathError{path: root, err: err}
 	}
 	if hasSkippedComponent(physical) {
 		_, err := fmt.Fprintf(config.errWriter(), "fpn: %s: skipped\n", displayPath(physical))
@@ -25,7 +25,7 @@ func Walk(root string, config Config) ([]string, error) {
 	}
 	info, err := os.Lstat(physical)
 	if err != nil {
-		return nil, fmt.Errorf("fpn: %s: %w", displayPath(physical), err)
+		return nil, rootPathError{path: root, err: err}
 	}
 	if !info.IsDir() || !config.Recursive {
 		if special {

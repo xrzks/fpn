@@ -10,6 +10,37 @@ import (
 	"testing"
 )
 
+func TestRunMissingPathDiagnostic(t *testing.T) {
+	base := t.TempDir()
+	old, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(base); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(old) })
+
+	for _, path := range []string{
+		"ijferowijf",
+		filepath.Join("missing-parent", "file"),
+		filepath.Join(base, "missing"),
+		"missing\nfile",
+	} {
+		for _, recursive := range []bool{false, true} {
+			err := Run([]string{path}, Config{Recursive: recursive, Writer: io.Discard, ErrWriter: io.Discard})
+			var pathErr *os.PathError
+			if !errors.Is(err, os.ErrNotExist) || !errors.As(err, &pathErr) {
+				t.Fatalf("path %q: lost missing-path cause: %v", path, err)
+			}
+			want := "fpn: " + displayPath(path) + ": " + pathErr.Err.Error()
+			if got := err.Error(); got != want {
+				t.Fatalf("Error() = %q, want %q", got, want)
+			}
+		}
+	}
+}
+
 func TestRunEscapesReturnedPaths(t *testing.T) {
 	for _, name := range []string{"missing\nfile", "missing\x1bfile", "missing\xfffile"} {
 		t.Run(fmt.Sprintf("%q", name), func(t *testing.T) {

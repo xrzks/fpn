@@ -5,6 +5,22 @@ import (
 	"strings"
 )
 
+// rootPathError reports the supplied path rather than repeating the resolved
+// path and filesystem operation from an underlying PathError.
+type rootPathError struct {
+	path string
+	err  error
+}
+
+func (e rootPathError) Unwrap() error { return e.err }
+func (e rootPathError) Error() string {
+	cause := e.err
+	if pathErr, ok := cause.(*os.PathError); ok {
+		cause = pathErr.Err
+	}
+	return "fpn: " + displayPath(e.path) + ": " + formatDiagnostic(cause)
+}
+
 // diagnosticError changes only rendering; unwrapping retains the original tree.
 type diagnosticError struct{ error }
 
@@ -13,6 +29,8 @@ func (e diagnosticError) Error() string { return formatDiagnostic(e.error) }
 
 func formatDiagnostic(err error) string {
 	switch e := err.(type) {
+	case rootPathError:
+		return e.Error()
 	case *os.PathError:
 		return e.Op + " " + displayPath(e.Path) + ": " + formatDiagnostic(e.Err)
 	case *os.LinkError:
