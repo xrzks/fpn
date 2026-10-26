@@ -609,6 +609,51 @@ func TestRunPreservesDestinationLinks(t *testing.T) {
 	}
 }
 
+func TestRunChildFirstAcrossPathAliases(t *testing.T) {
+	for _, alias := range []string{"mixed paths", "symlink parent", "renamed symlink parent"} {
+		t.Run(alias, func(t *testing.T) {
+			base := t.TempDir()
+			chdir(t, base)
+			parent := "Parent"
+			child := filepath.Join(parent, "Child File")
+			if alias != "mixed paths" {
+				parent = filepath.Join("deep", "nested", "Parent")
+				child = filepath.Join("Alias", "Child File")
+			}
+			mkdirs(t, base, parent)
+			touch(t, base, filepath.Join(parent, "Child File"))
+			paths := []string{filepath.Join(base, parent), child}
+			if alias != "mixed paths" {
+				if err := os.Symlink(parent, "Alias"); err != nil {
+					t.Skipf("cannot create parent symlink: %v", err)
+				}
+				if alias == "renamed symlink parent" {
+					paths = append(paths, "Alias")
+				}
+			}
+			if err := run(paths, Config{DryRun: true}); err != nil {
+				t.Fatalf("dry run: %v", err)
+			}
+			exists(t, base, filepath.Join(parent, "Child File"))
+			if err := run(paths, Config{}); err != nil {
+				t.Fatalf("real run: %v", err)
+			}
+			normalizedParent := filepath.Join(filepath.Dir(parent), "parent")
+			exists(t, base, filepath.Join(normalizedParent, "child-file"))
+			missing(t, base, parent, filepath.Join(normalizedParent, "Child File"))
+			if alias == "renamed symlink parent" {
+				// Renaming the link must not resolve its final component or
+				// rewrite its stored target, even though that target moved.
+				target, err := os.Readlink("alias")
+				if err != nil || target != parent {
+					t.Fatalf("symlink target=%q, err=%v", target, err)
+				}
+				missing(t, base, "Alias")
+			}
+		})
+	}
+}
+
 func TestRunRenamesDanglingSymlink(t *testing.T) {
 	base := t.TempDir()
 	chdir(t, base)

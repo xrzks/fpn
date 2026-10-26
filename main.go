@@ -258,6 +258,25 @@ func NormalizePaths(paths []string, config Config) error {
 		return pending[i].from < pending[j].from
 	})
 
+	// Resolve only parent directories, before any mutation. Execution paths
+	// must share an absolute, physical namespace: argument spelling (including
+	// symlink aliases) says nothing about ancestry. Keep pending unchanged for
+	// reporting, and never follow a final-component symlink being renamed.
+	execOrder := append([]renameOp(nil), pending...)
+	for i := range execOrder {
+		r := &execOrder[i]
+		dir, err := filepath.EvalSymlinks(filepath.Dir(r.from))
+		if err != nil {
+			return fmt.Errorf("fpn: resolve parent of %s: %w", r.from, err)
+		}
+		dir, err = filepath.Abs(dir)
+		if err != nil {
+			return fmt.Errorf("fpn: resolve parent of %s: %w", r.from, err)
+		}
+		r.from = filepath.Join(dir, filepath.Base(r.from))
+		r.to = filepath.Join(dir, filepath.Base(r.to))
+	}
+
 	if config.DryRun {
 		logRenames(pending)
 		if len(conflicts) > 0 {
@@ -267,10 +286,9 @@ func NormalizePaths(paths []string, config Config) error {
 		return nil
 	}
 
-	// Execute deepest paths first: renaming a directory invalidates the
-	// still-original paths of everything nested inside it, so children
-	// must be renamed before their ancestors.
-	execOrder := append([]renameOp(nil), pending...)
+	// Execute deepest physical paths first: renaming a directory invalidates
+	// the still-original paths of its descendants. Resolved execution paths
+	// also remain usable if a symlink alias itself is renamed first.
 	sort.Slice(execOrder, func(i, j int) bool {
 		di := strings.Count(execOrder[i].from, string(filepath.Separator))
 		dj := strings.Count(execOrder[j].from, string(filepath.Separator))
