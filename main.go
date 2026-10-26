@@ -120,13 +120,64 @@ func NormalizePaths(paths []string, config Config) error {
 		return nil
 	}
 
-	type planItem struct{ original, normalized string }
+	// Identify entries by their parent directory and basename, not path
+	// spelling. Stat follows parent symlinks and SameFile also recognizes
+	// case-insensitive parent aliases. Never resolve the final component:
+	// a symlink there is itself the entry we intend to rename.
+	type entryID struct {
+		parent int
+		name   string
+	}
+	var parents []os.FileInfo
+	parentIDs := make(map[string]int)
+	parentID := func(path string) (int, error) {
+		dir := filepath.Dir(path)
+		if id, ok := parentIDs[dir]; ok {
+			return id, nil
+		}
+		info, err := os.Stat(dir)
+		if err != nil {
+			return 0, fmt.Errorf("fpn: resolve parent of %s: %w", path, err)
+		}
+		if !info.IsDir() {
+			return 0, fmt.Errorf("fpn: parent of %s is not a directory", path)
+		}
+		for id, parent := range parents {
+			if os.SameFile(info, parent) {
+				parentIDs[dir] = id
+				return id, nil
+			}
+		}
+		id := len(parents)
+		parents = append(parents, info)
+		parentIDs[dir] = id
+		return id, nil
+	}
+
+	type planItem struct {
+		original, normalized string
+		target               entryID
+	}
 	var plan []planItem
+	seenSources := make(map[entryID]bool)
 	for _, p := range paths {
 		n := normalizePathName(p)
-		if p != n {
-			plan = append(plan, planItem{original: p, normalized: n})
+		if p == n {
+			continue
 		}
+		id, err := parentID(p)
+		if err != nil {
+			return err
+		}
+		source := entryID{parent: id, name: filepath.Base(p)}
+		if seenSources[source] {
+			continue
+		}
+		seenSources[source] = true
+		plan = append(plan, planItem{
+			original: p, normalized: n,
+			target: entryID{parent: id, name: filepath.Base(n)},
+		})
 	}
 
 	var pending []renameOp
@@ -135,20 +186,25 @@ func NormalizePaths(paths []string, config Config) error {
 
 	// Group by normalized target: if several sources map to the same
 	// target, report one collision for the group and rename none of them.
-	byTarget := make(map[string][]string)
+	byTarget := make(map[entryID][]planItem)
 	for _, item := range plan {
-		byTarget[item.normalized] = append(byTarget[item.normalized], item.original)
+		byTarget[item.target] = append(byTarget[item.target], item)
 	}
 	var filtered []planItem
 	for _, item := range plan {
-		if len(byTarget[item.normalized]) > 1 {
+		if len(byTarget[item.target]) > 1 {
 			continue
 		}
 		filtered = append(filtered, item)
 	}
-	for target, sources := range byTarget {
-		if len(sources) < 2 {
+	for _, items := range byTarget {
+		if len(items) < 2 {
 			continue
+		}
+		target := items[0].normalized
+		var sources []string
+		for _, item := range items {
+			sources = append(sources, item.original)
 		}
 		sort.Strings(sources)
 		conflicts = append(conflicts, fmt.Sprintf(
@@ -163,7 +219,7 @@ func NormalizePaths(paths []string, config Config) error {
 		original, normalized := item.original, item.normalized
 		srcInfo, srcErr := os.Lstat(original)
 		if srcErr != nil {
-			continue
+			return fmt.Errorf("fpn: %s: %w", original, srcErr)
 		}
 		dstInfo, dstErr := os.Lstat(normalized)
 		switch {

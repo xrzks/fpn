@@ -414,6 +414,111 @@ func TestRunDuplicateTargets(t *testing.T) {
 	missing(t, base, "a-b")
 }
 
+func TestRunAliasedParentCollision(t *testing.T) {
+	for _, alias := range []string{"absolute", "symlink", "case-insensitive"} {
+		for _, dry := range []bool{true, false} {
+			name := alias + map[bool]string{true: "/dry", false: "/rename"}[dry]
+			t.Run(name, func(t *testing.T) {
+				base := t.TempDir()
+				mkdirs(t, base, "Parent")
+				dir := filepath.Join(base, "Parent")
+				chdir(t, dir)
+				other := filepath.Join(dir, "a_b")
+				switch alias {
+				case "symlink":
+					link := filepath.Join(base, "alias")
+					if err := os.Symlink(dir, link); err != nil {
+						t.Skipf("cannot create parent symlink: %v", err)
+					}
+					other = filepath.Join(link, "a_b")
+				case "case-insensitive":
+					parentAlias := filepath.Join(base, "parent")
+					info, err := os.Stat(parentAlias)
+					if os.IsNotExist(err) {
+						t.Skip("filesystem has case-sensitive directory lookup")
+					}
+					if err != nil {
+						t.Fatal(err)
+					}
+					original, err := os.Stat(dir)
+					if err != nil || !os.SameFile(original, info) {
+						t.Fatalf("parent alias does not identify original: %v", err)
+					}
+					other = filepath.Join(parentAlias, "a_b")
+				}
+				for source, content := range map[string]string{"A b": "first", "a_b": "second"} {
+					if err := os.WriteFile(source, []byte(content), 0o644); err != nil {
+						t.Fatal(err)
+					}
+				}
+				if err := run([]string{"A b", other}, Config{DryRun: dry}); err == nil {
+					t.Fatal("expected alias collision error")
+				}
+				for source, want := range map[string]string{"A b": "first", "a_b": "second"} {
+					got, err := os.ReadFile(source)
+					if err != nil || string(got) != want {
+						t.Errorf("source %q changed: content=%q, err=%v", source, got, err)
+					}
+				}
+				if _, err := os.Lstat("a-b"); !os.IsNotExist(err) {
+					t.Fatalf("destination must remain absent: %v", err)
+				}
+			})
+		}
+	}
+}
+
+func TestRunSameSourceAliases(t *testing.T) {
+	for _, dry := range []bool{true, false} {
+		t.Run(map[bool]string{true: "dry", false: "rename"}[dry], func(t *testing.T) {
+			base := t.TempDir()
+			chdir(t, base)
+			if err := os.WriteFile("My File", []byte("source content"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			args := []string{"My File", filepath.Join(base, "My File")}
+			link := filepath.Join(t.TempDir(), "alias")
+			if err := os.Symlink(base, link); err == nil {
+				args = append(args, filepath.Join(link, "My File"))
+			} else {
+				t.Logf("cannot test symlink alias: %v", err)
+			}
+			if err := run(args, Config{DryRun: dry}); err != nil {
+				t.Fatalf("same-source aliases should not collide or execute twice: %v", err)
+			}
+			wantPath, absentPath := "my-file", "My File"
+			if dry {
+				wantPath, absentPath = absentPath, wantPath
+			}
+			got, err := os.ReadFile(wantPath)
+			if err != nil || string(got) != "source content" {
+				t.Fatalf("content=%q, err=%v", got, err)
+			}
+			if _, err := os.Lstat(absentPath); !os.IsNotExist(err) {
+				t.Fatalf("unexpected entry %q: %v", absentPath, err)
+			}
+		})
+	}
+}
+
+func TestNormalizePathsIdentityErrors(t *testing.T) {
+	for _, dry := range []bool{true, false} {
+		base := t.TempDir()
+		chdir(t, base)
+		touch(t, base, "Safe File")
+		if err := NormalizePaths([]string{"Safe File", "missing/My File"}, Config{DryRun: dry}); err == nil {
+			t.Fatal("expected parent identity resolution error")
+		}
+		exists(t, base, "Safe File")
+		missing(t, base, "safe-file")
+		if err := NormalizePaths([]string{"Safe File", "Missing File"}, Config{DryRun: dry}); err == nil {
+			t.Fatal("expected source lookup error")
+		}
+		exists(t, base, "Safe File")
+		missing(t, base, "safe-file")
+	}
+}
+
 func TestRunDryRunCollision(t *testing.T) {
 	for _, duplicateTarget := range []bool{false, true} {
 		t.Run(map[bool]string{false: "existing destination", true: "duplicate target"}[duplicateTarget], func(t *testing.T) {
