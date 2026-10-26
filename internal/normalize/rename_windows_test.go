@@ -23,7 +23,7 @@ func TestLongRenamePath(t *testing.T) {
 	}
 }
 
-func TestRenameOneLongWindowsPath(t *testing.T) {
+func TestRenameNoReplaceLongWindowsPath(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), strings.Repeat("a", 100), strings.Repeat("b", 100), strings.Repeat("c", 100))
 	if err := os.MkdirAll(dir, 0700); err != nil {
 		t.Fatal(err)
@@ -33,7 +33,7 @@ func TestRenameOneLongWindowsPath(t *testing.T) {
 	if err := os.WriteFile(from, []byte("original"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	if err := renameOne(renameOp{from: from, to: to}); err != nil {
+	if err := renameNoReplace(from, to); err != nil {
 		t.Fatal(err)
 	}
 	if data, err := os.ReadFile(to); err != nil || string(data) != "original" {

@@ -2,6 +2,7 @@ package normalize
 
 import (
 	"bytes"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -11,10 +12,10 @@ import (
 )
 
 // ---------------------------------------------------------------------------
-// normalizePathName
+// normalizeBaseName
 // ---------------------------------------------------------------------------
 
-func TestGetNormalizedPathName(t *testing.T) {
+func TestNormalizeBaseName(t *testing.T) {
 	tests := []struct {
 		name string
 		path string
@@ -61,7 +62,7 @@ func TestGetNormalizedPathName(t *testing.T) {
 			want: "a",
 		},
 		{
-			name: "underscores preserved",
+			name: "underscores become hyphens",
 			path: "my_file name.txt",
 			want: "my-file-name.txt",
 		},
@@ -136,11 +137,6 @@ func TestGetNormalizedPathName(t *testing.T) {
 			want: "a-b-c",
 		},
 		{
-			name: "preserves forward slashes",
-			path: "docs/2024/Q1 report.pdf",
-			want: "docs/2024/q1-report.pdf",
-		},
-		{
 			name: "unicode accented characters lowercased",
 			path: "Café résumé.txt",
 			want: "café-résumé.txt",
@@ -150,28 +146,43 @@ func TestGetNormalizedPathName(t *testing.T) {
 			path: "My Report (v2).txt",
 			want: "my-report-(v2).txt",
 		},
-		{
-			// Regression: only the final path component may be normalized.
-			// os.Rename cannot create missing intermediate directories, so
-			// normalizing ancestor directory names (uppercase, spaces,
-			// underscores) would produce a target path whose parent
-			// directory doesn't exist on disk.
-			name: "parent directories are left untouched",
-			path: "My_Dir/Sub Folder/My File.txt",
-			want: "My_Dir/Sub Folder/my-file.txt",
-		},
-		{
-			name: "trailing slash treated as directory with empty basename",
-			path: "My_Dir/",
-			want: "My_Dir/",
-		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := normalizePathName(tt.path)
+			got := normalizeBaseName(tt.path)
 			if got != tt.want {
-				t.Errorf("getNormalizedPathName(%q) = %q, want %q", tt.path, got, tt.want)
+				t.Errorf("normalizeBaseName(%q) = %q, want %q", tt.path, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestNormalizePathsPreservesParentNames(t *testing.T) {
+	for _, dry := range []bool{false, true} {
+		t.Run(fmt.Sprintf("dry=%t", dry), func(t *testing.T) {
+			parent := filepath.Join(t.TempDir(), "My_Dir", "Sub Folder")
+			if err := os.MkdirAll(parent, 0700); err != nil {
+				t.Fatal(err)
+			}
+			from := filepath.Join(parent, "My File.txt")
+			to := filepath.Join(parent, "my-file.txt")
+			if err := os.WriteFile(from, []byte("original"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			var out bytes.Buffer
+			if err := NormalizePaths([]string{from}, Config{DryRun: dry, Writer: &out}); err != nil {
+				t.Fatal(err)
+			}
+			present, absent := to, from
+			if dry {
+				present, absent = from, to
+			}
+			if data, err := os.ReadFile(present); err != nil || string(data) != "original" {
+				t.Fatalf("file under original parent = %q, %v", data, err)
+			}
+			if _, err := os.Lstat(absent); !os.IsNotExist(err) {
+				t.Fatalf("unexpected entry %q: %v", absent, err)
 			}
 		})
 	}

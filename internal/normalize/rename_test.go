@@ -10,7 +10,7 @@ import (
 	"testing"
 )
 
-func TestRenameOneDoesNotReplaceLateDestination(t *testing.T) {
+func TestRenameNoReplaceDoesNotReplaceLateDestination(t *testing.T) {
 	for _, kind := range []string{"file", "directory", "dangling symlink"} {
 		t.Run(kind, func(t *testing.T) {
 			dir := t.TempDir()
@@ -23,7 +23,6 @@ func TestRenameOneDoesNotReplaceLateDestination(t *testing.T) {
 				t.Fatal(err)
 			}
 			// Simulate a destination created after planning.
-			op := renameOp{from: from, to: to}
 			switch kind {
 			case "file":
 				if err := os.WriteFile(to, []byte("competitor"), 0600); err != nil {
@@ -42,7 +41,7 @@ func TestRenameOneDoesNotReplaceLateDestination(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if err := renameOne(op); !errors.Is(err, os.ErrExist) {
+			if err := renameNoReplace(from, to); !errors.Is(err, os.ErrExist) {
 				t.Fatalf("expected destination-exists error, got %v", err)
 			}
 			after, err := os.Lstat(to)
