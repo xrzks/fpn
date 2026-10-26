@@ -50,6 +50,47 @@ func TestInvalidArguments(t *testing.T) {
 	}
 }
 
+func TestEmptyPathRejectedBeforeMutations(t *testing.T) {
+	base := t.TempDir()
+	old, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(base); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(old) })
+	if err := os.WriteFile("My File", []byte("original"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, flags := range [][]string{nil, {"-r"}, {"--dry"}, {"--dry", "-r"}} {
+		for _, paths := range [][]string{{""}, {"My File", ""}, {"", "My File"}} {
+			args := append([]string{"fpn"}, flags...)
+			args = append(args, paths...)
+			t.Run(strings.Join(args, "/"), func(t *testing.T) {
+				var out, diagnostics bytes.Buffer
+				cmd := New()
+				cmd.Writer, cmd.ErrWriter = &out, &diagnostics
+				err := cmd.Run(context.Background(), args)
+				if err == nil || !strings.Contains(err.Error(), "path argument must not be empty") {
+					t.Fatalf("expected empty path error, got %v", err)
+				}
+				if out.Len() != 0 || diagnostics.Len() != 0 {
+					t.Fatalf("unexpected output: stdout=%q stderr=%q", &out, &diagnostics)
+				}
+				data, err := os.ReadFile("My File")
+				if err != nil || string(data) != "original" {
+					t.Fatalf("source changed: content=%q error=%v", data, err)
+				}
+				if _, err := os.Lstat("my-file"); !os.IsNotExist(err) {
+					t.Fatalf("unexpected destination: %v", err)
+				}
+			})
+		}
+	}
+}
+
 func TestRenameFlags(t *testing.T) {
 	for _, recursive := range []string{"", "--recursive", "-r"} {
 		for _, dry := range []bool{false, true} {

@@ -35,6 +35,7 @@ Directories are renamed after their contents, so nested paths are moved along wi
   - `hello -world` → `hello-world`
   - `a  -  b` → `a-b`
 - A trailing slash on an argument is ignored (`fpn "Test Dir/"` is the same as `fpn "Test Dir"`). Parent components are resolved before simplifying `..`, so paths through symlinks select the correct entry. Reports may use resolved paths for such arguments.
+- Empty path arguments are rejected before any traversal or renames, including when mixed with valid paths. Use `.` explicitly to select the current directory.
 - `.` and `..` normalize to themselves, so they are never renamed. With `--recursive` their contents are still walked. To rename the current directory, run `fpn` from its parent.
 - `.git` and `.DS_Store` are always skipped, including case variants, explicit descendants, and descendants reached through parent symlink aliases.
 - Recursion renames directories too (everything except `.git` and `.DS_Store`, including e.g. `node_modules`). There is no files-only mode, so run with `--dry` first.

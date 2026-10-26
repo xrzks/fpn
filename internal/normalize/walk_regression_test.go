@@ -15,6 +15,20 @@ func walkSymlink(t *testing.T, target, link string) {
 	}
 }
 
+func TestWalkRejectsEmptyRoot(t *testing.T) {
+	base := t.TempDir()
+	chdir(t, base)
+	touch(t, base, "My File")
+	for _, recursive := range []bool{false, true} {
+		got, err := Walk([]string{""}, Config{Recursive: recursive})
+		if err == nil || !strings.Contains(err.Error(), "path argument must not be empty") || len(got) != 0 {
+			t.Fatalf("Walk(empty, recursive=%v) = %v, %v; want no paths and an empty path error", recursive, got, err)
+		}
+	}
+	exists(t, base, "My File")
+	missing(t, base, "my-file")
+}
+
 func TestWalkResolvesDotDotBeforeCleaning(t *testing.T) {
 	base := t.TempDir()
 	mkdirs(t, base, "local", "physical/child")

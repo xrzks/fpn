@@ -65,17 +65,17 @@ func walkRoot(root string, config Config) ([]string, error) {
 // a nonexistent component. The final entry is deliberately not resolved, even
 // when the argument has a trailing slash: final symlinks are entries, not trees.
 func resolveWalkRoot(root string) (display, physical string, special bool, err error) {
+	if root == "" {
+		err = fmt.Errorf("fpn: path argument must not be empty")
+		return
+	}
 	root = filepath.FromSlash(root)
 	raw := strings.TrimRight(root, string(filepath.Separator))
 	if volume := filepath.VolumeName(root); volume != "" && raw == volume && len(root) > len(volume) {
 		raw = volume + string(filepath.Separator)
 	}
 	if raw == "" {
-		if root == "" {
-			raw = "."
-		} else {
-			raw = string(filepath.Separator)
-		}
+		raw = string(filepath.Separator)
 	}
 	parent, base := filepath.Split(raw) // Unlike Dir, Split does not clean.
 	special = base == "" || base == "." || base == ".."

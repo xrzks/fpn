@@ -35,13 +35,19 @@ func (c Config) errWriter() io.Writer {
 // Run walks and normalizes the supplied paths. The caller is responsible for
 // reporting the returned error.
 func Run(args []string, config Config) error {
-	var argsErr error
 	if len(args) < 1 {
-		argsErr = fmt.Errorf("please specify one or more directories or files")
+		return diagnosticError{fmt.Errorf("please specify one or more directories or files")}
+	}
+	// Validate every argument before traversal so malformed input cannot
+	// trigger partial renames of otherwise valid roots.
+	for _, path := range args {
+		if path == "" {
+			return diagnosticError{fmt.Errorf("fpn: path argument must not be empty")}
+		}
 	}
 	paths, walkErr := Walk(args, config)
 	normErr := NormalizePaths(paths, config)
-	if err := errors.Join(argsErr, walkErr, normErr); err != nil {
+	if err := errors.Join(walkErr, normErr); err != nil {
 		return diagnosticError{err}
 	}
 	return nil
