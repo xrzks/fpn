@@ -41,5 +41,8 @@ func Run(args []string, config Config) error {
 	}
 	paths, walkErr := Walk(args, config)
 	normErr := NormalizePaths(paths, config)
-	return errors.Join(argsErr, walkErr, normErr)
+	if err := errors.Join(argsErr, walkErr, normErr); err != nil {
+		return diagnosticError{err}
+	}
+	return nil
 }

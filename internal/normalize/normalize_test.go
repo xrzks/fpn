@@ -520,9 +520,12 @@ func TestNormalizePathsInvalidBasenames(t *testing.T) {
 				missing(t, base, "safe-file")
 			})
 		}
-		for _, path := range []string{"", ".", ".."} {
-			if err := NormalizePaths([]string{path}, Config{DryRun: dry}); err == nil {
-				t.Errorf("expected invalid basename error for %q (dry=%v)", path, dry)
+		if err := NormalizePaths([]string{""}, Config{DryRun: dry}); err == nil {
+			t.Errorf("expected invalid basename error for empty path (dry=%v)", dry)
+		}
+		for _, path := range []string{".", ".."} {
+			if err := NormalizePaths([]string{path}, Config{DryRun: dry}); err != nil {
+				t.Errorf("special directory %q must be a no-op: %v", path, err)
 			}
 		}
 	}

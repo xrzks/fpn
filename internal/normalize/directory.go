@@ -1,0 +1,164 @@
+package normalize
+
+import (
+	"errors"
+	"fmt"
+	"io/fs"
+	"os"
+	"path/filepath"
+	"strings"
+	"syscall"
+	"unicode"
+
+	"golang.org/x/text/unicode/norm"
+)
+
+// directory caches the actual entry names and lookup rules of one physical
+// parent. Hard links remain distinct entries even when SameFile returns true.
+type directory struct {
+	path                       string
+	entries                    map[string]fs.DirEntry
+	aliases                    map[string][]string
+	ignoreCase, ignoreEncoding bool
+}
+
+type directoryCache struct {
+	paths map[string]*directory
+	ids   map[string]*directory
+}
+
+func (c *directoryCache) get(path string) (*directory, error) {
+	if d := c.paths[path]; d != nil {
+		return d, nil
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		return nil, err
+	}
+	if !info.IsDir() {
+		return nil, fmt.Errorf("%q is not a directory", path)
+	}
+	id, err := directoryKey(path, info)
+	if err != nil {
+		return nil, err
+	}
+	if c.paths == nil {
+		c.paths = make(map[string]*directory)
+		c.ids = make(map[string]*directory)
+	}
+	if d := c.ids[id]; d != nil {
+		c.paths[path] = d
+		return d, nil
+	}
+	entries, err := os.ReadDir(path)
+	if err != nil {
+		return nil, err
+	}
+	d := &directory{path: path, entries: make(map[string]fs.DirEntry), aliases: make(map[string][]string)}
+	for _, entry := range entries {
+		name := entry.Name()
+		d.entries[name] = entry
+		key := foldedName(norm.NFD.String(name))
+		d.aliases[key] = append(d.aliases[key], name)
+	}
+	// Probe only existing entries: dry runs never create filesystem entries.
+	// Once a usable spelling is found, one lookup establishes each rule.
+	var caseChecked, encodingChecked bool
+	for _, entry := range entries {
+		name := entry.Name()
+		if !caseChecked {
+			alternate := strings.ToUpper(name)
+			if alternate == name {
+				alternate = strings.ToLower(name)
+			}
+			if alternate != name {
+				d.ignoreCase, caseChecked, err = d.isAlias(name, alternate)
+			}
+		}
+		if err == nil && !encodingChecked {
+			alternate := norm.NFD.String(name)
+			if alternate == name {
+				alternate = norm.NFC.String(name)
+			}
+			if alternate != name {
+				d.ignoreEncoding, encodingChecked, err = d.isAlias(name, alternate)
+			}
+		}
+		if err != nil {
+			return nil, err
+		}
+		if caseChecked && encodingChecked {
+			break
+		}
+	}
+	c.paths[path], c.ids[id] = d, d
+	return d, nil
+}
+
+func (d *directory) isAlias(name, alternate string) (alias, checked bool, err error) {
+	if d.entries[alternate] != nil {
+		return false, true, nil // A separately listed entry is never an alias.
+	}
+	other, err := os.Lstat(filepath.Join(d.path, alternate))
+	if os.IsNotExist(err) {
+		return false, true, nil
+	}
+	if errors.Is(err, syscall.ENAMETOOLONG) {
+		return false, false, nil // An optional probe cannot invalidate another entry.
+	}
+	if err != nil {
+		return false, false, err
+	}
+	info, err := d.entries[name].Info()
+	return err == nil && os.SameFile(info, other), err == nil, err
+}
+
+func (d *directory) nameKey(name string) string {
+	if d.ignoreEncoding {
+		name = norm.NFD.String(name)
+	}
+	if d.ignoreCase {
+		name = foldedName(name)
+	}
+	return name
+}
+
+// actualName resolves aliases to a stored directory-entry name, not an inode.
+func (d *directory) actualName(name string, info os.FileInfo) (string, error) {
+	if d.entries[name] != nil {
+		return name, nil
+	}
+	candidates := d.aliases[foldedName(norm.NFD.String(name))]
+	actual := ""
+	for _, candidate := range candidates {
+		if d.nameKey(candidate) != d.nameKey(name) {
+			continue
+		}
+		entryInfo, err := d.entries[candidate].Info()
+		if err != nil {
+			return "", err
+		}
+		if os.SameFile(info, entryInfo) {
+			if actual != "" {
+				return "", fmt.Errorf("ambiguous filename alias %q in %q", name, d.path)
+			}
+			actual = candidate
+		}
+	}
+	if actual == "" {
+		return "", fmt.Errorf("cannot identify directory entry %q in %q", name, d.path)
+	}
+	return actual, nil
+}
+
+func foldedName(name string) string {
+	return strings.Map(func(r rune) rune {
+		minimum := r
+		for next := unicode.SimpleFold(r); next != r; next = unicode.SimpleFold(next) {
+			if next < minimum {
+				minimum = next
+			}
+		}
+		return minimum
+	}, name)
+}
