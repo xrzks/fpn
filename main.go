@@ -161,7 +161,12 @@ func NormalizePaths(paths []string, config Config) error {
 	var plan []planItem
 	seenSources := make(map[entryID]bool)
 	for _, p := range paths {
-		n := normalizePathName(p)
+		dir, base := filepath.Split(p)
+		base = normalizeBaseName(base)
+		if base == "" || base == "." || base == ".." {
+			return fmt.Errorf("fpn: invalid normalized basename %q for %q: must not be empty, . or ..", base, p)
+		}
+		n := dir + base
 		if p == n {
 			continue
 		}

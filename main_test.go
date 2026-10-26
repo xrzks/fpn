@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"sort"
+	"strings"
 	"testing"
 )
 
@@ -498,6 +499,32 @@ func TestRunSameSourceAliases(t *testing.T) {
 				t.Fatalf("unexpected entry %q: %v", absentPath, err)
 			}
 		})
+	}
+}
+
+func TestNormalizePathsInvalidBasenames(t *testing.T) {
+	for _, dry := range []bool{true, false} {
+		mode := map[bool]string{true: "dry", false: "rename"}[dry]
+		for _, name := range []string{" ", "\t\n", "\u2003", " . ", " .. "} {
+			t.Run(mode+"/"+name, func(t *testing.T) {
+				base := t.TempDir()
+				chdir(t, base)
+				touch(t, base, "Safe File", name)
+				// Include a valid operation first to verify validation happens
+				// before any planned renames are executed.
+				err := run([]string{"Safe File", name}, Config{DryRun: dry})
+				if err == nil || !strings.Contains(err.Error(), "invalid normalized basename") {
+					t.Fatalf("expected invalid basename diagnostic, got %v", err)
+				}
+				exists(t, base, name, "Safe File")
+				missing(t, base, "safe-file")
+			})
+		}
+		for _, path := range []string{"", ".", ".."} {
+			if err := NormalizePaths([]string{path}, Config{DryRun: dry}); err == nil {
+				t.Errorf("expected invalid basename error for %q (dry=%v)", path, dry)
+			}
+		}
 	}
 }
 
