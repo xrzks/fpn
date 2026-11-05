@@ -130,11 +130,8 @@ func TestRunDestinationNameTooLongIsNotCollision(t *testing.T) {
 	target := "b" + strings.Repeat("\u2c65", 100)
 	touch(t, base, source)
 	_, probeErr := os.Lstat(target)
-	if runtime.GOOS == "windows" && !errors.Is(probeErr, syscall.ENAMETOOLONG) {
-		t.Skip("platform allows this destination length or uses a different length error")
-	}
 	if !errors.Is(probeErr, syscall.ENAMETOOLONG) {
-		t.Fatalf("destination length probe = %v, want ENAMETOOLONG", probeErr)
+		t.Skipf("filesystem does not reject this destination with ENAMETOOLONG: %v", probeErr)
 	}
 	var out, diagnostics bytes.Buffer
 	err := Run([]string{source}, Config{Writer: &out, ErrWriter: &diagnostics})

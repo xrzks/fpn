@@ -613,7 +613,8 @@ func TestRunRecursivePreservesDirectoriesAndSymlinkTargets(t *testing.T) {
 		t.Fatal(err)
 	}
 	exists(t, base, "Parent/Child Dir/child-file", "Parent/my-link")
-	missing(t, base, "parent", "Parent/Child Dir/Child File", "Parent/My Link")
+	assertPaths(t, planningEntryNames(t), []string{"Parent"})
+	missing(t, base, "Parent/Child Dir/Child File", "Parent/My Link")
 	if target, err := os.Readlink("Parent/my-link"); err != nil || target != "Child Dir" {
 		t.Fatalf("symlink target=%q, err=%v", target, err)
 	}

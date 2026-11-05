@@ -3,6 +3,7 @@ package normalize
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -40,6 +41,59 @@ func TestDirectoryKeysRespectLookupRules(t *testing.T) {
 	if d.nameKey("CAFÉ") != d.nameKey(decomposed) || d.nameKey("σ") != d.nameKey("ς") {
 		t.Fatal("casefold aliases must share target keys")
 	}
+	if d.nameKey("ß") == d.nameKey("ss") {
+		t.Fatal("simple case folding must preserve expansion-distinct names")
+	}
+	d.fullCaseFold = true
+	if d.nameKey("ß") != d.nameKey("ss") {
+		t.Fatal("full casefold aliases must share target keys")
+	}
+}
+
+func TestUnicodeTargetCollisionsPreventAllRenames(t *testing.T) {
+	for _, tt := range []struct {
+		name, probe, first, second, alias string
+	}{
+		{"negative initial case probe", "0ı", "ſ File", "s_File", "s File"},
+		{"expanding case fold", "", "ß File", "ss_File", "ss File"},
+	} {
+		for _, dry := range []bool{true, false} {
+			t.Run(fmt.Sprintf("%s/dry=%v", tt.name, dry), func(t *testing.T) {
+				base := t.TempDir()
+				chdir(t, base)
+				touch(t, base, "A File", tt.first, tt.second)
+				if tt.probe != "" {
+					touch(t, base, tt.probe)
+				}
+				requirePlanningAlias(t, tt.first, tt.alias)
+				before := planningEntryNames(t)
+				var out, diagnostics bytes.Buffer
+				err := Run([]string{"."}, Config{Recursive: true, DryRun: dry, Writer: &out, ErrWriter: &diagnostics})
+				if err == nil || !strings.Contains(diagnostics.String(), "multiple sources") {
+					t.Fatalf("expected preflight collision: error=%v, diagnostics=%q", err, &diagnostics)
+				}
+				if out.Len() != 0 {
+					t.Fatalf("failed plan reported renames: %q", &out)
+				}
+				assertPaths(t, planningEntryNames(t), before)
+			})
+		}
+	}
+}
+
+func TestExpansionDistinctTargetsRemainIndependent(t *testing.T) {
+	base := t.TempDir()
+	chdir(t, base)
+	touch(t, base, "A File", "ß File", "ss_File")
+	if _, err := os.Lstat("ss File"); err == nil {
+		t.Skip("filesystem aliases expanded case folds")
+	} else if !os.IsNotExist(err) {
+		t.Fatal(err)
+	}
+	if err := Run([]string{"."}, Config{Recursive: true, Writer: io.Discard}); err != nil {
+		t.Fatal(err)
+	}
+	assertPaths(t, planningEntryNames(t), []string{"a-file", "ss-file", "ß-file"})
 }
 
 func TestCanonicalAliasDoesNotSelectWrongCaseHardlink(t *testing.T) {

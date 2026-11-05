@@ -44,7 +44,8 @@ func TestRunMissingPathDiagnostic(t *testing.T) {
 func TestRunEscapesReturnedPaths(t *testing.T) {
 	for _, name := range []string{"missing\nfile", "missing\x1bfile", "missing\xfffile"} {
 		t.Run(fmt.Sprintf("%q", name), func(t *testing.T) {
-			path := filepath.Join(t.TempDir(), name)
+			base := t.TempDir()
+			path := filepath.Join(base, name)
 			err := Run([]string{path}, Config{Writer: io.Discard, ErrWriter: io.Discard})
 			if err == nil {
 				t.Fatal("expected missing-path error")
@@ -56,7 +57,7 @@ func TestRunEscapesReturnedPaths(t *testing.T) {
 				t.Fatalf("lost missing-file cause: %v", err)
 			}
 			var pathErr *os.PathError
-			if !errors.As(err, &pathErr) || pathErr.Path != path {
+			if !errors.As(err, &pathErr) || pathErr.Path != filepath.Join(physicalDir(t, base), name) {
 				t.Fatalf("lost original PathError: %#v", pathErr)
 			}
 		})

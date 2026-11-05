@@ -9,7 +9,9 @@ import (
 	"strings"
 	"syscall"
 	"unicode"
+	"unicode/utf8"
 
+	"golang.org/x/text/cases"
 	"golang.org/x/text/unicode/norm"
 )
 
@@ -19,6 +21,7 @@ type directory struct {
 	path                       string
 	entries                    map[string]fs.DirEntry
 	ignoreCase, ignoreEncoding bool
+	fullCaseFold               bool
 }
 
 type directoryCache struct {
@@ -59,32 +62,43 @@ func (c *directoryCache) get(path string) (*directory, error) {
 		d.entries[name] = entry
 	}
 	// Probe only existing entries: dry runs never create filesystem entries.
-	// Once a usable spelling is found, one lookup establishes each rule.
-	var caseChecked, encodingChecked bool
+	// A negative Unicode probe does not establish a directory-wide rule (for
+	// example, dotless i need not alias I on a case-insensitive filesystem).
 	for _, entry := range entries {
 		name := entry.Name()
-		if !caseChecked {
+		if !d.ignoreCase {
 			alternate := strings.ToUpper(name)
 			if alternate == name {
 				alternate = strings.ToLower(name)
 			}
 			if alternate != name {
-				d.ignoreCase, caseChecked, err = d.isAlias(name, alternate)
+				d.ignoreCase, _, err = d.isAlias(name, alternate)
 			}
 		}
-		if err == nil && !encodingChecked {
+		// Some filesystems also expand characters while folding (ß -> ss).
+		// Probe this separately so simple-fold filesystems keep those distinct.
+		if err == nil && !d.fullCaseFold {
+			alternate := cases.Fold().String(name)
+			if utf8.RuneCountInString(alternate) > utf8.RuneCountInString(name) {
+				d.fullCaseFold, _, err = d.isAlias(name, alternate)
+				if d.fullCaseFold {
+					d.ignoreCase = true
+				}
+			}
+		}
+		if err == nil && !d.ignoreEncoding {
 			alternate := norm.NFD.String(name)
 			if alternate == name {
 				alternate = norm.NFC.String(name)
 			}
 			if alternate != name {
-				d.ignoreEncoding, encodingChecked, err = d.isAlias(name, alternate)
+				d.ignoreEncoding, _, err = d.isAlias(name, alternate)
 			}
 		}
 		if err != nil {
 			return nil, err
 		}
-		if caseChecked && encodingChecked {
+		if d.ignoreCase && d.fullCaseFold && d.ignoreEncoding {
 			break
 		}
 	}
@@ -114,7 +128,9 @@ func (d *directory) nameKey(name string) string {
 	if d.ignoreEncoding {
 		name = norm.NFD.String(name)
 	}
-	if d.ignoreCase {
+	if d.fullCaseFold {
+		name = cases.Fold().String(name)
+	} else if d.ignoreCase {
 		name = foldedName(name)
 	}
 	return name
