@@ -13,12 +13,12 @@ func TestHelp(t *testing.T) {
 	for _, flag := range []string{"--help", "-h"} {
 		t.Run(flag, func(t *testing.T) {
 			var out, diagnostics bytes.Buffer
-			cmd := New()
+			cmd := New("test")
 			cmd.Writer, cmd.ErrWriter = &out, &diagnostics
 			if err := cmd.Run(context.Background(), []string{"fpn", flag}); err != nil {
 				t.Fatal(err)
 			}
-			for _, want := range []string{"fpn", "<path>", "--dry", "--recursive", "-r", "--help", "leaving all directories unchanged"} {
+			for _, want := range []string{"fpn", "<path>", "--dry-run", "--recursive", "-r", "--help", "leaving all directories unchanged"} {
 				if !strings.Contains(out.String(), want) {
 					t.Errorf("help missing %q: %s", want, &out)
 				}
@@ -31,10 +31,10 @@ func TestHelp(t *testing.T) {
 }
 
 func TestInvalidArguments(t *testing.T) {
-	for _, args := range [][]string{nil, {"--unknown"}, {"--dry=invalid"}} {
+	for _, args := range [][]string{nil, {"--unknown"}, {"--dry-run=invalid"}} {
 		t.Run(strings.Join(args, " "), func(t *testing.T) {
 			var out, diagnostics bytes.Buffer
-			cmd := New()
+			cmd := New("test")
 			cmd.Writer, cmd.ErrWriter = &out, &diagnostics
 			err := cmd.Run(context.Background(), append([]string{"fpn"}, args...))
 			if err == nil {
@@ -64,13 +64,13 @@ func TestEmptyPathRejectedBeforeMutations(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	for _, flags := range [][]string{nil, {"-r"}, {"--dry"}, {"--dry", "-r"}} {
+	for _, flags := range [][]string{nil, {"-r"}, {"--dry-run"}, {"--dry-run", "-r"}} {
 		for _, paths := range [][]string{{""}, {"My File", ""}, {"", "My File"}, {"My File", "Other File"}, {"My File", "My File"}} {
 			args := append([]string{"fpn"}, flags...)
 			args = append(args, paths...)
 			t.Run(strings.Join(args, "/"), func(t *testing.T) {
 				var out, diagnostics bytes.Buffer
-				cmd := New()
+				cmd := New("test")
 				cmd.Writer, cmd.ErrWriter = &out, &diagnostics
 				err := cmd.Run(context.Background(), args)
 				want := "path argument must not be empty"
@@ -112,11 +112,11 @@ func TestRenameFlags(t *testing.T) {
 					args = append(args, recursive)
 				}
 				if dry {
-					args = append(args, "--dry")
+					args = append(args, "--dry-run")
 				}
 				args = append(args, root)
 				var out, diagnostics bytes.Buffer
-				cmd := New()
+				cmd := New("test")
 				cmd.Writer, cmd.ErrWriter = &out, &diagnostics
 				if err := cmd.Run(context.Background(), args); err != nil {
 					t.Fatal(err)
@@ -165,7 +165,7 @@ func TestEndOfFlags(t *testing.T) {
 		t.Fatal(err)
 	}
 	var out, diagnostics bytes.Buffer
-	cmd := New()
+	cmd := New("test")
 	cmd.Writer, cmd.ErrWriter = &out, &diagnostics
 	if err := cmd.Run(context.Background(), []string{"fpn", "--", "-My File"}); err != nil {
 		t.Fatal(err)

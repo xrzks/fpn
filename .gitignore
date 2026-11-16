@@ -1,1 +1,5 @@
-fpn
+/fpn
+*.test
+*.out
+go.work
+go.work.sum
